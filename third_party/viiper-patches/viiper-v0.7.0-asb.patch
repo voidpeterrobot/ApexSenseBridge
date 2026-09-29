@@ -1,3 +1,220 @@
+diff --git a/device/dualsense/asb_capture.go b/device/dualsense/asb_capture.go
+new file mode 100644
+index 0000000..889841e
+--- /dev/null
++++ b/device/dualsense/asb_capture.go
+@@ -0,0 +1,104 @@
++package dualsense
++
++import (
++	"encoding/binary"
++	"sync"
++	"time"
++
++	"github.com/Alia5/VIIPER/usb"
++)
++
++// Capture ABI 1 is separate from the legacy magnitude-summary callback.
++// All fields are little endian. Pointers are borrowed only during the callback.
++const CaptureHeaderSize = 80
++const CaptureMaxRecord = 1024 * 1024
++const CaptureMaxPackets = 4096
++
++type captureState struct {
++	mu         sync.Mutex
++	callback   func([]byte)
++	sequence   uint64
++	generation uint64
++	epoch      time.Time
++}
++
++// SetCaptureCallback serializes delivery. Clearing it waits for every in-flight
++// callback; recipients must not unregister recursively from their callback.
++func (d *DualSense) SetCaptureCallback(callback func([]byte)) {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
++	d.capture.callback = callback
++	if callback != nil {
++		// Capture is registered before attachment. Give this session an explicit
++		// USB serial so Windows audio endpoint association need not guess by name.
++		d.descriptor.Device.ISerialNumber = 3
++		d.descriptor.Strings[3] = d.metaState.SerialNumber
++		d.capture.sequence, d.capture.generation = 0, 0
++		d.capture.epoch = time.Now()
++		d.captureEventLocked(5, 0)
++	}
++}
++
++func (d *DualSense) CaptureLifecycle(event, value uint32) {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
++	if event == 1 || event == 2 || event == 3 {
++		d.capture.generation++
++	}
++	d.captureEventLocked(event, value)
++}
++
++func (d *DualSense) captureEventLocked(event, value uint32) {
++	var data [8]byte
++	binary.LittleEndian.PutUint32(data[:], event)
++	binary.LittleEndian.PutUint32(data[4:], value)
++	d.captureRecordLocked(3, 0, 0, 4, data[:], nil)
++}
++
++func (d *DualSense) captureRecord(kind uint16, ep, dir, source uint32, data []byte, packets []usb.IsoPacket) {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
++	d.captureRecordLocked(kind, ep, dir, source, data, packets)
++}
++
++func (d *DualSense) captureRecordLocked(kind uint16, ep, dir, source uint32, data []byte, packets []usb.IsoPacket) {
++	if d.capture.callback == nil {
++		return
++	}
++	if len(packets) > CaptureMaxPackets || len(data) > CaptureMaxRecord-CaptureHeaderSize-16*len(packets) {
++		d.captureEventLocked(6, 1) // evidence exceeded ABI bounds; never silently truncate
++		return
++	}
++	b := make([]byte, CaptureHeaderSize+16*len(packets)+len(data))
++	copy(b, "ASBR")
++	binary.LittleEndian.PutUint16(b[4:], 1)
++	binary.LittleEndian.PutUint16(b[6:], kind)
++	binary.LittleEndian.PutUint32(b[8:], uint32(len(b)))
++	binary.LittleEndian.PutUint32(b[12:], CaptureHeaderSize)
++	d.capture.sequence++
++	binary.LittleEndian.PutUint64(b[16:], d.capture.sequence)
++	binary.LittleEndian.PutUint64(b[24:], d.capture.generation)
++	binary.LittleEndian.PutUint64(b[32:], uint64(time.Since(d.capture.epoch).Nanoseconds()))
++	binary.LittleEndian.PutUint32(b[40:], ep)
++	binary.LittleEndian.PutUint32(b[44:], dir)
++	if kind == 1 {
++		binary.LittleEndian.PutUint32(b[48:], 48000)
++		binary.LittleEndian.PutUint16(b[52:], 4)
++		binary.LittleEndian.PutUint16(b[54:], 16)
++	}
++	binary.LittleEndian.PutUint32(b[56:], uint32(len(packets)))
++	binary.LittleEndian.PutUint32(b[60:], uint32(len(data)))
++	// Offset 64 is transfer status: unavailable at submission, represented by
++	// zero together with flags=1. Packet fields are observed request fields.
++	binary.LittleEndian.PutUint32(b[68:], source)
++	binary.LittleEndian.PutUint32(b[72:], 1)
++	for i, p := range packets {
++		o := CaptureHeaderSize + i*16
++		binary.LittleEndian.PutUint32(b[o:], p.Offset)
++		binary.LittleEndian.PutUint32(b[o+4:], p.Length)
++		binary.LittleEndian.PutUint32(b[o+8:], p.ActualLength)
++		binary.LittleEndian.PutUint32(b[o+12:], uint32(p.Status))
++	}
++	copy(b[CaptureHeaderSize+16*len(packets):], data)
++	d.capture.callback(b)
++}
+diff --git a/device/dualsense/asb_capture_test.go b/device/dualsense/asb_capture_test.go
+new file mode 100644
+index 0000000..14eb67a
+--- /dev/null
++++ b/device/dualsense/asb_capture_test.go
+@@ -0,0 +1,101 @@
++package dualsense
++
++import (
++	"bytes"
++	"encoding/binary"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/Alia5/VIIPER/usb"
++	"github.com/Alia5/VIIPER/usbip"
++)
++
++func TestCaptureOriginalSignedPCMAndPackets(t *testing.T) {
++	d, _ := New(nil)
++	var frames [][]byte
++	d.SetCaptureCallback(func(b []byte) { frames = append(frames, bytes.Clone(b)) })
++	pcm := []byte{0, 128, 255, 127, 255, 255, 1, 0, 17, 18}
++	p := []usb.IsoPacket{{Offset: 0, Length: 8, ActualLength: 0, Status: 0}}
++	d.HandleIsoTransfer(1, usbip.DirOut, pcm, p)
++	if len(frames) != 2 {
++		t.Fatal(len(frames))
++	}
++	b := frames[1]
++	if string(b[:4]) != "ASBR" || binary.LittleEndian.Uint16(b[4:]) != 1 || binary.LittleEndian.Uint16(b[6:]) != 1 ||
++		binary.LittleEndian.Uint32(b[8:]) != uint32(len(b)) || binary.LittleEndian.Uint64(b[16:]) != 2 ||
++		binary.LittleEndian.Uint32(b[56:]) != 1 || binary.LittleEndian.Uint32(b[88:]) != 0 || !bytes.Equal(b[96:], pcm) {
++		t.Fatalf("raw record changed: %x", b)
++	}
++	pcm[0] = 42
++	if b[96] != 0 {
++		t.Fatal("callback receiver copy changed")
++	}
++}
++
++func TestCaptureHIDControlInterfaceAndBounds(t *testing.T) {
++	d, _ := New(nil)
++	var frames [][]byte
++	d.SetCaptureCallback(func(b []byte) { frames = append(frames, bytes.Clone(b)) })
++	report := make([]byte, 48)
++	report[0] = 2
++	report[3] = 255
++	d.HandleTransfer(3, usbip.DirOut, report)
++	d.HandleControl(0x21, 9, 0x0202, 3, 48, report)
++	d.HandleControl(0x21, 9, 0x0202, 1, 48, report) // audio interface must not emit HID
++	if len(frames) != 3 || !bytes.Equal(frames[1][80:], report) || !bytes.Equal(frames[2][88:], report) {
++		t.Fatal("HID source/bytes")
++	}
++	d.HandleIsoTransfer(1, usbip.DirOut, make([]byte, CaptureMaxRecord), nil)
++	last := frames[len(frames)-1]
++	if binary.LittleEndian.Uint16(last[6:]) != 3 || binary.LittleEndian.Uint32(last[80:]) != 6 {
++		t.Fatal("oversize not surfaced")
++	}
++	// Audio GET_CUR with a HID feature-like value must not return firmware.
++	b, _ := d.HandleControl(0xa1, 1, 0x0320, 1, 3, nil)
++	if len(b) != 0 {
++		t.Fatal("audio control dispatched as HID")
++	}
++	edge, _ := NewEdge(nil)
++	feature, handled := edge.HandleControl(0xa1, 1, 0x0320, 0, 64, nil)
++	if !handled || len(feature) == 0 || feature[0] != 0x20 {
++		t.Fatal("legacy Edge HID interface regressed")
++	}
++}
++
++func TestCaptureGenerationsAndUnregisterBarrier(t *testing.T) {
++	d, _ := New(nil)
++	var generations []uint64
++	d.SetCaptureCallback(func(b []byte) { generations = append(generations, binary.LittleEndian.Uint64(b[24:])) })
++	d.CaptureLifecycle(1, 0)
++	d.CaptureLifecycle(3, 1)
++	d.SetInterfaceAlt(1, 1)
++	d.SetInterfaceAlt(1, 1)
++	d.CaptureLifecycle(2, 0)
++	if len(generations) != 5 || generations[4] != 4 {
++		t.Fatal(generations)
++	}
++	d.SetCaptureCallback(nil)
++	entered, release := make(chan struct{}), make(chan struct{})
++	d.SetCaptureCallback(func(b []byte) {
++		if binary.LittleEndian.Uint16(b[6:]) == 2 {
++			close(entered)
++			<-release
++		}
++	})
++	var workers sync.WaitGroup
++	workers.Add(1)
++	go func() { defer workers.Done(); d.HandleTransfer(3, usbip.DirOut, []byte{2}) }()
++	<-entered
++	done := make(chan struct{})
++	go func() { d.SetCaptureCallback(nil); close(done) }()
++	select {
++	case <-done:
++		t.Fatal("unregistered before callback returned")
++	case <-time.After(10 * time.Millisecond):
++	}
++	close(release)
++	workers.Wait()
++	<-done
++	d.HandleTransfer(3, usbip.DirOut, []byte{2}) // no callback after clear
++}
 diff --git a/device/dualsense/asb_descriptor.go b/device/dualsense/asb_descriptor.go
 new file mode 100644
 index 0000000..09018dd
@@ -153,10 +370,10 @@ index 0000000..09018dd
 +}
 diff --git a/device/dualsense/asb_extensions.go b/device/dualsense/asb_extensions.go
 new file mode 100644
-index 0000000..11e75ac
+index 0000000..7ee937b
 --- /dev/null
 +++ b/device/dualsense/asb_extensions.go
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,362 @@
 +package dualsense
 +
 +import (
@@ -313,8 +530,17 @@ index 0000000..11e75ac
 +	return nil
 +}
 +
++func (d *DualSense) IsoOutFormat(ep uint32) (uint32, uint32, bool) {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
++	// Scope this correction to the isolated raw-capture/live path. Legacy
++	// output callbacks and the regular bridge retain their existing policy.
++	return 8, 48000, ep == 1 && d.capture.callback != nil
++}
++
 +func (d *DualSense) HandleIsoTransfer(ep uint32, dir uint32, out []byte, packets []usb.IsoPacket) ([]byte, []usb.IsoPacket) {
 +	if dir == usbip.DirOut && ep == 1 {
++		d.captureRecord(1, ep, dir, 1, out, packets)
 +		d.consumeAudioHaptics(out)
 +		return nil, completeIsoPackets(packets, out)
 +	}
@@ -326,12 +552,22 @@ index 0000000..11e75ac
 +}
 +
 +func (d *DualSense) SetInterfaceAlt(interfaceNumber, alternateSetting uint8) {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
 +	if int(interfaceNumber) < len(d.interfaceAlt) {
++		if d.interfaceAlt[interfaceNumber] != alternateSetting {
++			if interfaceNumber == 1 {
++				d.capture.generation++
++			}
++			d.captureEventLocked(4, uint32(interfaceNumber)|uint32(alternateSetting)<<8)
++		}
 +		d.interfaceAlt[interfaceNumber] = alternateSetting
 +	}
 +}
 +
 +func (d *DualSense) GetInterfaceAlt(interfaceNumber uint8) uint8 {
++	d.capture.mu.Lock()
++	defer d.capture.mu.Unlock()
 +	if int(interfaceNumber) < len(d.interfaceAlt) {
 +		return d.interfaceAlt[interfaceNumber]
 +	}
@@ -502,7 +738,7 @@ index 0000000..11e75ac
 +}
 diff --git a/device/dualsense/asb_extensions_test.go b/device/dualsense/asb_extensions_test.go
 new file mode 100644
-index 0000000..2bfd9a1
+index 0000000..596a3e7
 --- /dev/null
 +++ b/device/dualsense/asb_extensions_test.go
 @@ -0,0 +1,181 @@
@@ -687,6 +923,36 @@ index 0000000..2bfd9a1
 +		t.Fatalf("audio haptics were not extracted: %+v", got)
 +	}
 +}
+diff --git a/device/dualsense/asb_pacing_test.go b/device/dualsense/asb_pacing_test.go
+new file mode 100644
+index 0000000..cdd09c0
+--- /dev/null
++++ b/device/dualsense/asb_pacing_test.go
+@@ -0,0 +1,24 @@
++package dualsense
++
++import "testing"
++
++func TestRawAudioPacingOptIn(t *testing.T) {
++	d, err := New(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, _, on := d.IsoOutFormat(1); on {
++		t.Fatal("legacy policy changed")
++	}
++	d.SetCaptureCallback(func([]byte) {})
++	if bytes, rate, on := d.IsoOutFormat(1); !on || bytes != 8 || rate != 48000 {
++		t.Fatalf("wrong raw format %d %d %v", bytes, rate, on)
++	}
++	if _, _, on := d.IsoOutFormat(2); on {
++		t.Fatal("non-render endpoint paced")
++	}
++	d.SetCaptureCallback(nil)
++	if _, _, on := d.IsoOutFormat(1); on {
++		t.Fatal("pacing still enabled after unregister")
++	}
++}
 diff --git a/device/dualsense/const.go b/device/dualsense/const.go
 index 530b457..4f60e07 100644
 --- a/device/dualsense/const.go
@@ -710,10 +976,14 @@ index 530b457..4f60e07 100644
  
  const (
 diff --git a/device/dualsense/device.go b/device/dualsense/device.go
-index 5dd1d2c..905a515 100644
+index 5dd1d2c..85a360b 100644
 --- a/device/dualsense/device.go
 +++ b/device/dualsense/device.go
-@@ -19,15 +19,30 @@ type DualSense struct {
+@@ -16,18 +16,34 @@ import (
+ )
+ 
+ type DualSense struct {
++	capture    captureState
  	inputState *InputState
  	metaState  *MetaState
  
@@ -747,7 +1017,7 @@ index 5dd1d2c..905a515 100644
  }
  
  func New(o *device.CreateOptions) (*DualSense, error) {
-@@ -84,13 +99,15 @@ func new(o *device.CreateOptions, edge bool) (*DualSense, error) {
+@@ -84,13 +100,15 @@ func new(o *device.CreateOptions, edge bool) (*DualSense, error) {
  	}
  
  	d := &DualSense{
@@ -764,7 +1034,7 @@ index 5dd1d2c..905a515 100644
  	}
  
  	if o != nil {
-@@ -124,9 +141,35 @@ func (d *DualSense) SetMetaState(meta MetaState) {
+@@ -124,9 +142,35 @@ func (d *DualSense) SetMetaState(meta MetaState) {
  }
  
  func (d *DualSense) SetOutputCallback(f func(OutputState)) {
@@ -800,9 +1070,23 @@ index 5dd1d2c..905a515 100644
  func (d *DualSense) UpdateInputState(state *InputState) {
  	d.mtx.Lock()
  	defer d.mtx.Unlock()
-@@ -169,8 +212,9 @@ func (d *DualSense) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
+@@ -154,6 +198,11 @@ func (d *DualSense) GetDeviceSpecificArgs() map[string]any {
+ }
+ 
+ func (d *DualSense) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
++	if dir == usbip.DirOut && ep == 1 {
++		// Unexpected non-iso audio is evidence too. Zero packet descriptors make
++		// it invalid for PCM analysis, instead of silently losing the transfer.
++		d.captureRecord(1, ep, dir, 1, out, nil)
++	}
+ 	if dir == usbip.DirIn {
+ 		switch ep {
+ 		case 4:
+@@ -168,9 +217,11 @@ func (d *DualSense) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
+ 	}
  
  	if dir == usbip.DirOut && ep == 3 {
++		d.captureRecord(2, ep, dir, 2, out, nil)
  		if len(out) >= 48 && out[0] == ReportIDOutput {
 -			if d.outputFunc != nil {
 -				d.outputFunc(parseOutputReport(out))
@@ -812,7 +1096,37 @@ index 5dd1d2c..905a515 100644
  			}
  		}
  	}
-@@ -221,14 +265,21 @@ func (d *DualSense) HandleControl(bmRequestType, bRequest uint8, wValue, wIndex,
+@@ -179,6 +230,29 @@ func (d *DualSense) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
+ }
+ 
+ func (d *DualSense) HandleControl(bmRequestType, bRequest uint8, wValue, wIndex, wLength uint16, data []byte) ([]byte, bool) {
++	hidInterface := uint8(3)
++	if len(d.descriptor.Interfaces) == 1 {
++		hidInterface = 0 // legacy Edge descriptor remains HID-only
++	}
++	// Audio class requests share request numbers with HID. Dispatch by interface first.
++	if (bmRequestType == 0x21 || bmRequestType == 0x22 || bmRequestType == 0xA1 || bmRequestType == 0xA2) && uint8(wIndex) != hidInterface {
++		if bmRequestType == 0x22 && bRequest == 1 && wValue == 0x0100 && uint8(wIndex) == 1 {
++			if len(data) != 3 || data[0] != 0x80 || data[1] != 0xbb || data[2] != 0 {
++				d.CaptureLifecycle(6, 2) // unsupported sampling format
++			}
++		}
++		return d.handleAudioClassControl(bRequest, wValue, wLength, data), true
++	}
++	if bmRequestType == hidClassOUT && bRequest == hidSetReport && uint8(wIndex) == hidInterface {
++		// Preserve the setup packet as well as the complete, unmodified data stage.
++		raw := make([]byte, 8+len(data))
++		raw[0], raw[1] = bmRequestType, bRequest
++		binary.LittleEndian.PutUint16(raw[2:], wValue)
++		binary.LittleEndian.PutUint16(raw[4:], wIndex)
++		binary.LittleEndian.PutUint16(raw[6:], wLength)
++		copy(raw[8:], data)
++		d.captureRecord(2, 0, usbip.DirOut, 3, raw, nil)
++	}
+ 	reportType := uint8(wValue >> 8)
+ 	reportID := uint8(wValue & 0xFF)
+ 
+@@ -221,14 +295,21 @@ func (d *DualSense) HandleControl(bmRequestType, bRequest uint8, wValue, wIndex,
  			case reportType == reportTypeFeature:
  				return nil, true
  			case reportType == reportTypeOutput && reportID == ReportIDOutput && len(data) >= 48:
@@ -836,7 +1150,9 @@ index 5dd1d2c..905a515 100644
  	slog.Warn("DualSense control request unhandled",
  		"bmRequestType", bmRequestType,
  		"bRequest", bRequest,
-@@ -312,32 +363,16 @@ func (d *DualSense) featureReportPairing() []byte {
+@@ -310,36 +391,20 @@ func (d *DualSense) featureReportPairing() []byte {
+ }
+ 
  func (d *DualSense) featureReportFirmware() []byte {
 -	report := make([]byte, 64)
 -	report[0] = featureIDFirmware
@@ -883,6 +1199,8 @@ index 5dd1d2c..905a515 100644
 +		0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 +	}
  }
+ 
+ func (d *DualSense) featureReportCommandResponse() []byte {
 diff --git a/device/dualsense/ds_handler.go b/device/dualsense/ds_handler.go
 index 3a02c10..d21ba1f 100644
 --- a/device/dualsense/ds_handler.go
@@ -1157,8 +1475,441 @@ index 5c0cc81..2271313 100644
  	WriteBatchFlushInterval time.Duration `help:"Interval to flush write batches to clients; 0 to disable" default:"1ms" env:"VIIPER_USB_WRITE_BATCH_FLUSH_INTERVAL"`
 +	LoopbackOnly            bool          `kong:"-"`
  }
+diff --git a/internal/server/usb/iso_out_pacer.go b/internal/server/usb/iso_out_pacer.go
+new file mode 100644
+index 0000000..954c888
+--- /dev/null
++++ b/internal/server/usb/iso_out_pacer.go
+@@ -0,0 +1,190 @@
++package usb
++
++import (
++	"fmt"
++	"sync"
++	"time"
++
++	"github.com/Alia5/VIIPER/usbip"
++)
++
++// Count declared packet bytes, excluding URB padding and incomplete frames.
++// Completion pacing must not depend on signal amplitude or selected channels.
++func isoAudioDuration(packets []usbip.IsoPacketDescriptor, payloadBytes, frameBytes, rate uint32) (time.Duration, error) {
++	if frameBytes == 0 || rate == 0 || len(packets) == 0 || len(packets) > 4096 || payloadBytes > 1024*1024 {
++		return 0, fmt.Errorf("invalid paced ISO format/size")
++	}
++	var end, frames uint64
++	for _, p := range packets {
++		if p.Status != 0 || p.ActualLength > p.Length || uint64(p.Offset) != end || p.Length%frameBytes != 0 || uint64(p.Offset)+uint64(p.Length) > uint64(payloadBytes) {
++			return 0, fmt.Errorf("invalid paced ISO packet")
++		}
++		end += uint64(p.Length)
++		frames += uint64(p.Length / frameBytes)
++	}
++	if frames == 0 {
++		return 0, fmt.Errorf("empty paced ISO audio")
++	}
++	// Round up: never acknowledge a partial sample period early.
++	return time.Duration((frames*uint64(time.Second) + uint64(rate) - 1) / uint64(rate)), nil
++}
++
++type isoPacerTimer interface {
++	channel() <-chan time.Time
++	stop()
++}
++type realIsoPacerTimer struct{ *time.Timer }
++
++func (t realIsoPacerTimer) channel() <-chan time.Time { return t.C }
++func (t realIsoPacerTimer) stop()                     { t.Stop() }
++
++type pacedIsoCompletion struct {
++	seq      uint32
++	ret      usbip.RetSubmit
++	packets  []usbip.IsoPacketDescriptor
++	duration time.Duration
++	charge   int
++}
++
++// One worker per USB connection completes audio requests in order. Waiting
++// happens off the connection reader, so HID, EP0 and UNLINK stay responsive.
++// Every request gets its full duration after the previous actual completion:
++// scheduler stalls never create a burst of catch-up acknowledgements.
++type isoOutPacer struct {
++	mu                 sync.Mutex
++	queue              []*pacedIsoCompletion
++	pending            map[uint32]*pacedIsoCompletion
++	bytes              int
++	wake, done, exited chan struct{}
++	once               sync.Once
++	send               func(usbip.RetSubmit, []usbip.IsoPacketDescriptor) error
++	fail               func(error)
++	newTimer           func(time.Duration) isoPacerTimer
++}
++
++func newIsoOutPacer(send func(usbip.RetSubmit, []usbip.IsoPacketDescriptor) error, fail func(error), timer func(time.Duration) isoPacerTimer) *isoOutPacer {
++	if timer == nil {
++		timer = func(d time.Duration) isoPacerTimer { return realIsoPacerTimer{time.NewTimer(d)} }
++	}
++	p := &isoOutPacer{pending: make(map[uint32]*pacedIsoCompletion), wake: make(chan struct{}, 1), done: make(chan struct{}), exited: make(chan struct{}), send: send, fail: fail, newTimer: timer}
++	go p.run()
++	return p
++}
++func (p *isoOutPacer) notify() {
++	select {
++	case p.wake <- struct{}{}:
++	default:
++	}
++}
++func (p *isoOutPacer) enqueue(seq uint32, ret usbip.RetSubmit, packets []usbip.IsoPacketDescriptor, duration time.Duration) error {
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	select {
++	case <-p.done:
++		return fmt.Errorf("ISO pacer closed")
++	default:
++	}
++	charge := len(packets)*16 + 128
++	if duration <= 0 || duration > 3*time.Second || len(packets) > 4096 || len(p.pending) >= 128 || charge > 4*1024*1024-p.bytes || p.pending[seq] != nil {
++		return fmt.Errorf("ISO pacing queue/sequence/duration limit")
++	}
++	e := &pacedIsoCompletion{seq: seq, ret: ret, packets: append([]usbip.IsoPacketDescriptor(nil), packets...), duration: duration, charge: charge}
++	p.pending[seq] = e
++	p.queue = append(p.queue, e)
++	p.bytes += charge
++	p.notify()
++	return nil
++}
++func (p *isoOutPacer) cancel(seq uint32) {
++	p.mu.Lock()
++	if e := p.pending[seq]; e != nil {
++		delete(p.pending, seq)
++		p.bytes -= e.charge
++		for i, queued := range p.queue {
++			if queued == e {
++				p.queue = append(p.queue[:i], p.queue[i+1:]...)
++				break
++			}
++		}
++	}
++	p.mu.Unlock()
++	p.notify()
++}
++
++// The owner closes the socket before close(), to release any blocked write.
++func (p *isoOutPacer) close() {
++	p.once.Do(func() { close(p.done) })
++	<-p.exited
++	p.mu.Lock()
++	p.pending = make(map[uint32]*pacedIsoCompletion)
++	p.queue = nil
++	p.bytes = 0
++	p.mu.Unlock()
++}
++func (p *isoOutPacer) run() {
++	defer close(p.exited)
++	for {
++		select {
++		case <-p.done:
++			return
++		default:
++		}
++		p.mu.Lock()
++		var e *pacedIsoCompletion
++		if len(p.queue) > 0 {
++			e = p.queue[0]
++			p.queue = p.queue[1:]
++		}
++		p.mu.Unlock()
++		if e == nil {
++			select {
++			case <-p.done:
++				return
++			case <-p.wake:
++				continue
++			}
++		}
++		timer := p.newTimer(e.duration)
++		waiting := true
++		for waiting {
++			select {
++			case <-p.done:
++				timer.stop()
++				return
++			case <-p.wake:
++				p.mu.Lock()
++				cancelled := p.pending[e.seq] != e
++				p.mu.Unlock()
++				if cancelled {
++					timer.stop()
++					waiting = false
++				}
++			case <-timer.channel():
++				p.mu.Lock()
++				select {
++				case <-p.done:
++					p.mu.Unlock()
++					timer.stop()
++					return
++				default:
++				}
++				if p.pending[e.seq] == e {
++					// Serialize cancellation against an acknowledgement already writing.
++					err := p.send(e.ret, e.packets)
++					delete(p.pending, e.seq)
++					p.bytes -= e.charge
++					p.mu.Unlock()
++					if err != nil {
++						timer.stop()
++						p.fail(err)
++						return
++					}
++				} else {
++					p.mu.Unlock()
++				}
++				waiting = false
++			}
++		}
++		timer.stop()
++	}
++}
+diff --git a/internal/server/usb/iso_out_pacer_test.go b/internal/server/usb/iso_out_pacer_test.go
+new file mode 100644
+index 0000000..5623f0f
+--- /dev/null
++++ b/internal/server/usb/iso_out_pacer_test.go
+@@ -0,0 +1,231 @@
++package usb
++
++import (
++	"errors"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/Alia5/VIIPER/usbip"
++)
++
++type manualIsoTimer struct {
++	duration time.Duration
++	ticks    chan time.Time
++	stopped  atomic.Bool
++}
++
++func (t *manualIsoTimer) channel() <-chan time.Time { return t.ticks }
++func (t *manualIsoTimer) stop()                     { t.stopped.Store(true) }
++
++type pacerHarness struct {
++	p      *isoOutPacer
++	timers chan *manualIsoTimer
++	sent   chan usbip.RetSubmit
++	failed chan error
++}
++
++func makePacerHarness(t *testing.T) *pacerHarness {
++	t.Helper()
++	h := &pacerHarness{timers: make(chan *manualIsoTimer, 256), sent: make(chan usbip.RetSubmit, 256), failed: make(chan error, 1)}
++	h.p = newIsoOutPacer(func(r usbip.RetSubmit, p []usbip.IsoPacketDescriptor) error { h.sent <- r; return nil }, func(e error) { h.failed <- e }, func(d time.Duration) isoPacerTimer {
++		timer := &manualIsoTimer{duration: d, ticks: make(chan time.Time, 1)}
++		h.timers <- timer
++		return timer
++	})
++	t.Cleanup(h.p.close)
++	return h
++}
++func (h *pacerHarness) timer(t *testing.T) *manualIsoTimer {
++	t.Helper()
++	select {
++	case timer := <-h.timers:
++		return timer
++	case <-time.After(2 * time.Second):
++		t.Fatal("no paced timer")
++		return nil
++	}
++}
++func (h *pacerHarness) enqueue(t *testing.T, seq uint32, d time.Duration) {
++	t.Helper()
++	if err := h.p.enqueue(seq, usbip.RetSubmit{Basic: usbip.HeaderBasic{Seqnum: seq}}, []usbip.IsoPacketDescriptor{{Length: 3840, ActualLength: 3840}}, d); err != nil {
++		t.Fatal(err)
++	}
++}
++func (h *pacerHarness) expect(t *testing.T, seq uint32) {
++	t.Helper()
++	select {
++	case ret := <-h.sent:
++		if ret.Basic.Seqnum != seq {
++			t.Fatalf("out of order: %d, want %d", ret.Basic.Seqnum, seq)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("no completion")
++	}
++}
++func (h *pacerHarness) noSend(t *testing.T) {
++	t.Helper()
++	select {
++	case ret := <-h.sent:
++		t.Fatalf("early completion: %d", ret.Basic.Seqnum)
++	default:
++	}
++}
++
++func TestIsoAudioDuration(t *testing.T) {
++	packets := make([]usbip.IsoPacketDescriptor, 10)
++	for i := range packets {
++		packets[i] = usbip.IsoPacketDescriptor{Offset: uint32(i * 384), Length: 384}
++	}
++	d, err := isoAudioDuration(packets, 4000, 8, 48000) // 160 padding bytes are not audio.
++	if err != nil || d != 10*time.Millisecond {
++		t.Fatalf("duration=%v err=%v", d, err)
++	}
++	if d, err := isoAudioDuration([]usbip.IsoPacketDescriptor{{Length: 8}}, 8, 8, 48000); err != nil || d != 20834*time.Nanosecond {
++		t.Fatalf("partial period rounded down: %v %v", d, err)
++	}
++	for _, bad := range []usbip.IsoPacketDescriptor{{Offset: 1, Length: 8}, {Length: 7}, {Length: 16}, {Length: 8, ActualLength: 9}, {Length: 8, Status: -1}, {Length: 0}} {
++		if _, err := isoAudioDuration([]usbip.IsoPacketDescriptor{bad}, 8, 8, 48000); err == nil {
++			t.Fatalf("invalid packet accepted: %+v", bad)
++		}
++	}
++}
++func TestIsoPacerOrdersBurstWithoutCatchup(t *testing.T) {
++	h := makePacerHarness(t)
++	for i := uint32(1); i <= 8; i++ {
++		h.enqueue(t, i, 10*time.Millisecond)
++	}
++	for i := uint32(1); i <= 8; i++ {
++		timer := h.timer(t)
++		if timer.duration != 10*time.Millisecond {
++			t.Fatalf("duration %v", timer.duration)
++		}
++		h.noSend(t)
++		// A very late wake must not cause the remaining seven URBs to complete.
++		timer.ticks <- time.Now().Add(time.Second)
++		h.expect(t, i)
++	}
++}
++func TestIsoPacerSixtySecondSampleBudget(t *testing.T) {
++	h := makePacerHarness(t)
++	var elapsed time.Duration
++	for i := uint32(1); i <= 6000; i++ {
++		h.enqueue(t, i, 10*time.Millisecond)
++		timer := h.timer(t)
++		elapsed += timer.duration
++		timer.ticks <- time.Now()
++		h.expect(t, i)
++	}
++	if elapsed != 60*time.Second {
++		t.Fatalf("60 seconds of samples scheduled in %v", elapsed)
++	}
++}
++func TestIsoPacerCancellationAndShutdown(t *testing.T) {
++	h := makePacerHarness(t)
++	h.enqueue(t, 1, 10*time.Millisecond)
++	first := h.timer(t)
++	h.enqueue(t, 2, 10*time.Millisecond)
++	h.enqueue(t, 3, 10*time.Millisecond)
++	h.p.cancel(2)
++	h.p.cancel(1)
++	third := h.timer(t)
++	if !first.stopped.Load() {
++		t.Fatal("cancelled timer remains armed")
++	}
++	first.ticks <- time.Now()
++	h.noSend(t)
++	third.ticks <- time.Now()
++	h.expect(t, 3)
++	h.enqueue(t, 4, 10*time.Millisecond)
++	last := h.timer(t)
++	h.p.close()
++	last.ticks <- time.Now()
++	h.noSend(t)
++	if err := h.p.enqueue(5, usbip.RetSubmit{}, nil, time.Millisecond); err == nil {
++		t.Fatal("enqueue after close")
++	}
++}
++func TestIsoPacerQueueBudgetAndOwnership(t *testing.T) {
++	h := makePacerHarness(t)
++	for i := uint32(1); i <= 128; i++ {
++		h.enqueue(t, i, time.Millisecond)
++	}
++	if err := h.p.enqueue(129, usbip.RetSubmit{}, nil, time.Millisecond); err == nil {
++		t.Fatal("unbounded pending queue")
++	}
++	if err := h.p.enqueue(1, usbip.RetSubmit{}, nil, time.Millisecond); err == nil {
++		t.Fatal("duplicate sequence")
++	}
++	h.p.cancel(128)
++	h.enqueue(t, 129, time.Millisecond)
++	// Teardown must stop a full queue without waiting for 128 timers.
++	h.p.close()
++	h.noSend(t)
++}
++func TestIsoPacerWriteFailureStopsQueue(t *testing.T) {
++	timers := make(chan *manualIsoTimer, 1)
++	failed := make(chan error, 1)
++	var calls atomic.Int32
++	p := newIsoOutPacer(func(usbip.RetSubmit, []usbip.IsoPacketDescriptor) error {
++		calls.Add(1)
++		return errors.New("socket failed")
++	}, func(err error) { failed <- err }, func(d time.Duration) isoPacerTimer {
++		x := &manualIsoTimer{duration: d, ticks: make(chan time.Time, 1)}
++		timers <- x
++		return x
++	})
++	defer p.close()
++	for i := uint32(1); i < 3; i++ {
++		if err := p.enqueue(i, usbip.RetSubmit{}, nil, time.Millisecond); err != nil {
++			t.Fatal(err)
++		}
++	}
++	select {
++	case timer := <-timers:
++		timer.ticks <- time.Now()
++	case <-time.After(2 * time.Second):
++		t.Fatal("no timer")
++	}
++	select {
++	case <-failed:
++	case <-time.After(2 * time.Second):
++		t.Fatal("write failure not reported")
++	}
++	p.close()
++	if calls.Load() != 1 {
++		t.Fatal("write after failure")
++	}
++}
++
++func TestIsoPacerOwnsCompletionDescriptors(t *testing.T) {
++	timers := make(chan *manualIsoTimer, 1)
++	sent := make(chan uint32, 1)
++	p := newIsoOutPacer(func(_ usbip.RetSubmit, packets []usbip.IsoPacketDescriptor) error {
++		sent <- packets[0].ActualLength
++		return nil
++	}, func(err error) { t.Error(err) }, func(d time.Duration) isoPacerTimer {
++		x := &manualIsoTimer{duration: d, ticks: make(chan time.Time, 1)}
++		timers <- x
++		return x
++	})
++	defer p.close()
++	packets := []usbip.IsoPacketDescriptor{{Length: 3840, ActualLength: 3840}}
++	if err := p.enqueue(1, usbip.RetSubmit{}, packets, 10*time.Millisecond); err != nil {
++		t.Fatal(err)
++	}
++	packets[0].ActualLength = 1
++	select {
++	case timer := <-timers:
++		timer.ticks <- time.Now()
++	case <-time.After(2 * time.Second):
++		t.Fatal("no timer")
++	}
++	select {
++	case actual := <-sent:
++		if actual != 3840 {
++			t.Fatal("borrowed completion descriptors")
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("no completion")
++	}
++}
 diff --git a/internal/server/usb/server.go b/internal/server/usb/server.go
-index fe0802b..5f87f72 100644
+index fe0802b..018eeca 100644
 --- a/internal/server/usb/server.go
 +++ b/internal/server/usb/server.go
 @@ -33,6 +33,8 @@ type batchingWriter struct {
@@ -1253,7 +2004,18 @@ index fe0802b..5f87f72 100644
  // Ready returns a channel that is closed once the server has successfully bound
  // to its listen address and is ready to accept connections.
  func (s *Server) Ready() <-chan struct{} { return s.ready }
-@@ -572,6 +592,82 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+@@ -561,6 +581,10 @@ func (lc *logConn) Write(p []byte) (int, error) {
+ }
+ 
+ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
++	if observed, ok := dev.(interface{ CaptureLifecycle(uint32, uint32) }); ok {
++		observed.CaptureLifecycle(1, 0)
++		defer observed.CaptureLifecycle(2, 0)
++	}
+ 	_ = conn.SetDeadline(time.Time{})
+ 
+ 	var writer io.Writer
+@@ -572,6 +596,91 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
  	} else {
  		writer = conn
  	}
@@ -1288,6 +2050,15 @@ index fe0802b..5f87f72 100644
 +		defer writerMu.Unlock()
 +		return ret.Write(writer)
 +	}
++	isoPacer := newIsoOutPacer(func(ret usbip.RetSubmit, packets []usbip.IsoPacketDescriptor) error {
++		return writeRetSubmit(ret, nil, packets)
++	}, func(err error) {
++		if !isClientDisconnect(err) {
++			s.logger.Error("paced ISO OUT completion failed", "error", err)
++		}
++		_ = conn.Close()
++	}, nil)
++	defer func() { _ = conn.Close(); isoPacer.close() }()
 +
 +	type pendingIsoOutSubmit struct {
 +		ret usbip.RetSubmit
@@ -1336,9 +2107,11 @@ index fe0802b..5f87f72 100644
  
  	var owningBus *virtualbus.VirtualBus
  	for _, b := range s.busses {
-@@ -643,9 +739,18 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+@@ -642,10 +751,20 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+ 		ep := binary.BigEndian.Uint32(hdr[urbHdrOffsetEp : urbHdrOffsetEp+4])
  		if cmd == usbip.CmdUnlinkCode {
  			unlinkSeq := binary.BigEndian.Uint32(hdr[urbHdrOffsetUnlink : urbHdrOffsetUnlink+4])
++			isoPacer.cancel(unlinkSeq)
  			s.logger.Debug("USBIP_CMD_UNLINK", "seq", seq, "unlink", unlinkSeq)
 +			pendingMu.Lock()
 +			if pending, ok := pendingIsoOut[unlinkSeq]; ok {
@@ -1356,7 +2129,7 @@ index fe0802b..5f87f72 100644
  			continue
  		}
  		if cmd != usbip.CmdSubmitCode {
-@@ -653,6 +758,9 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+@@ -653,6 +772,9 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
  		}
  		xferFlags := binary.BigEndian.Uint32(hdr[urbHdrOffsetFlags : urbHdrOffsetFlags+4])
  		xferLen := binary.BigEndian.Uint32(hdr[urbHdrOffsetLength : urbHdrOffsetLength+4])
@@ -1366,7 +2139,7 @@ index fe0802b..5f87f72 100644
  		setup := hdr[urbHdrOffsetSetup:urbHdrSize]
  
  		var outPayload []byte
-@@ -663,7 +771,19 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+@@ -663,7 +785,19 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
  			}
  		}
  
@@ -1387,7 +2160,7 @@ index fe0802b..5f87f72 100644
  
  		actualLen := uint32(len(respData))
  		if dir == usbip.DirOut {
-@@ -674,22 +794,14 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
+@@ -674,22 +808,30 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
  			Basic:           usbip.HeaderBasic{Command: usbip.RetSubmitCode, Seqnum: seq, Devid: 0, Dir: 0, Ep: 0},
  			Status:          0,
  			ActualLength:    actualLen,
@@ -1408,15 +2181,30 @@ index fe0802b..5f87f72 100644
 -		if len(respData) > 0 {
 -			if _, err := writer.Write(respData); err != nil {
 -				return fmt.Errorf("write RET_SUBMIT payload: %w", err)
--			}
 +		if isIsoTransfer && dir == usbip.DirOut && len(respIsoPackets) > 0 {
-+			scheduleIsoOutSubmit(seq, ret, respIsoPackets)
++			paced := false
++			if device, ok := dev.(usb.IsoOutPacingDevice); ok {
++				frameBytes, rate, enabled := device.IsoOutFormat(ep)
++				if enabled {
++					duration, err := isoAudioDuration(isoPackets, uint32(len(outPayload)), frameBytes, rate)
++					if err != nil {
++						return err
++					}
++					if err := isoPacer.enqueue(seq, ret, respIsoPackets, duration); err != nil {
++						return err
++					}
++					paced = true
++				}
++			}
++			if !paced {
++				scheduleIsoOutSubmit(seq, ret, respIsoPackets)
+ 			}
 +		} else if err := writeRetSubmit(ret, respData, respIsoPackets); err != nil {
 +			return err
  		}
  		if bw != nil && ep == 0 {
  			if err := bw.Flush(); err != nil {
-@@ -728,13 +840,62 @@ func isClientDisconnect(err error) bool {
+@@ -728,13 +870,62 @@ func isClientDisconnect(err error) bool {
  	return false
  }
  
@@ -1482,7 +2270,7 @@ index fe0802b..5f87f72 100644
  	}
  	bm := setup[0]
  	breq := setup[1]
-@@ -743,16 +904,19 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -743,16 +934,22 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  	wLength := binary.LittleEndian.Uint16(setup[6:8])
  
  	if breq == usbReqGetStatus {
@@ -1498,6 +2286,9 @@ index fe0802b..5f87f72 100644
  	}
  	if breq == usbReqSetConfiguration && bm == usbReqTypeStandardToDevice {
 -		return nil
++		if observed, ok := dev.(interface{ CaptureLifecycle(uint32, uint32) }); ok {
++			observed.CaptureLifecycle(3, uint32(wValue))
++		}
 +		return nil, nil
  	}
  	if breq == usbReqGetConfiguration && bm == usbReqTypeStandardFromDevice {
@@ -1506,7 +2297,7 @@ index fe0802b..5f87f72 100644
  	}
  
  	desc := dev.GetDescriptor()
-@@ -774,12 +938,12 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -774,12 +971,12 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  			}
  		}
  		if len(data) == 0 {
@@ -1522,7 +2313,7 @@ index fe0802b..5f87f72 100644
  	}
  
  	if desc.MicrosoftOS10 != nil &&
-@@ -788,9 +952,9 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -788,9 +985,9 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  			wIndex == 0x0004 || wIndex == 0x0005) {
  		if data, ok := desc.MicrosoftOS10.ControlResponse(wValue, wIndex); ok {
  			if int(wLength) < len(data) {
@@ -1534,7 +2325,7 @@ index fe0802b..5f87f72 100644
  		}
  	}
  
-@@ -798,21 +962,22 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -798,21 +995,22 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  		dtype := uint8(wValue >> 8)
  		iface := uint8(wIndex & 0xff)
  		var data []byte
@@ -1560,7 +2351,7 @@ index fe0802b..5f87f72 100644
  					}
  					data = []byte(d)
  				}
-@@ -827,23 +992,31 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -827,23 +1025,31 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  			}
  		}
  		if len(data) == 0 {
@@ -1598,7 +2389,7 @@ index fe0802b..5f87f72 100644
  		}
  	}
  
-@@ -851,15 +1024,15 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -851,15 +1057,15 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  		if desc.Interfaces[iface].Descriptor.BInterfaceClass == usbInterfaceClassHID {
  			switch {
  			case bm == hidReqTypeIn && breq == hidReqGetIdle:
@@ -1619,7 +2410,7 @@ index fe0802b..5f87f72 100644
  			}
  		}
  	}
-@@ -868,7 +1041,7 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
+@@ -868,7 +1074,7 @@ func (s *Server) processSubmit(dev usb.Device, ep uint32, dir uint32, setup []by
  		s.logger.Debug("EP0 control unhandled", "bmRequestType", bm, "bRequest", breq, "wValue", wValue, "wIndex", wIndex, "wLength", wLength)
  	}
  
@@ -1667,6 +2458,75 @@ index 0000000..8987b7a
 +			}
 +		})
 +	}
++}
+diff --git a/lib/viiper/asb_capture.go b/lib/viiper/asb_capture.go
+new file mode 100644
+index 0000000..0c6e301
+--- /dev/null
++++ b/lib/viiper/asb_capture.go
+@@ -0,0 +1,63 @@
++package main
++
++/*
++#include <stdint.h>
++typedef void (*ASBCaptureCallback)(uintptr_t, const uint8_t*, uint32_t);
++static void call_asb_capture(ASBCaptureCallback cb, uintptr_t ctx, const uint8_t* data, uint32_t size) { cb(ctx, data, size); }
++*/
++import "C"
++
++import (
++	"context"
++	"log/slog"
++	"runtime/cgo"
++	"time"
++	"unsafe"
++
++	"github.com/Alia5/VIIPER/device/dualsense"
++	"github.com/Alia5/VIIPER/internal/server/api"
++)
++
++// GetASBCaptureCapabilities returns raw audio/HID/lifecycle bits for ABI 1 only.
++//
++//export GetASBCaptureCapabilities
++func GetASBCaptureCapabilities(version C.uint32_t) C.uint32_t {
++	if version != 1 {
++		return 0
++	}
++	return 7
++}
++
++//export SetDualSenseASBCaptureCallback
++func SetDualSenseASBCaptureCallback(handle C.uintptr_t, cb C.ASBCaptureCallback, ctx C.uintptr_t) bool {
++	w, ok := cgo.Handle(handle).Value().(*deviceHandleWrapper)
++	if !ok {
++		return false
++	}
++	d, ok := w.device.(*dualsense.DualSense)
++	if !ok {
++		return false
++	}
++	if cb == nil {
++		d.SetCaptureCallback(nil)
++		return true
++	}
++	d.SetCaptureCallback(func(b []byte) {
++		C.call_asb_capture(cb, ctx, (*C.uint8_t)(unsafe.Pointer(&b[0])), C.uint32_t(len(b)))
++	})
++	return true
++}
++
++// Attach separately so input initialization and capture registration precede
++// every host request. Caller owns cleanup even if attachment fails.
++//
++//export AttachDualSenseASBDevice
++func AttachDualSenseASBDevice(handle C.uintptr_t) bool {
++	w, ok := cgo.Handle(handle).Value().(*deviceHandleWrapper)
++	if !ok {
++		return false
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	return api.AttachLocalhostClient(ctx, w.exportMeta, w.usbServer.s.GetListenPort(), true, slog.Default()) == nil
 +}
 diff --git a/lib/viiper/dualsense.go b/lib/viiper/dualsense.go
 index 05a7849..e0305e0 100644
@@ -1802,7 +2662,7 @@ index 0924794..89c503d 100644
  
  	readyChan := s.Ready()
 diff --git a/usb/device.go b/usb/device.go
-index bfa4742..f217a41 100644
+index bfa4742..7a3b6dc 100644
 --- a/usb/device.go
 +++ b/usb/device.go
 @@ -1,7 +1,7 @@
@@ -1814,7 +2674,7 @@ index bfa4742..f217a41 100644
  type Device interface {
  	// HandleTransfer processes a non-EP0 transfer (interrupt/bulk).
  	// ep is the endpoint number (without direction). dir is usbip.DirIn or usbip.DirOut.
-@@ -28,3 +28,24 @@ type ControlDevice interface {
+@@ -28,3 +28,30 @@ type ControlDevice interface {
  	// If handled is true, the returned bytes (if any) will be used as the IN data stage.
  	HandleControl(bmRequestType, bRequest uint8, wValue, wIndex, wLength uint16, data []byte) (resp []byte, handled bool)
  }
@@ -1831,6 +2691,12 @@ index bfa4742..f217a41 100644
 +// endpoints. The server still falls back to HandleTransfer for non-ISO URBs.
 +type IsoTransferDevice interface {
 +	HandleIsoTransfer(ep uint32, dir uint32, out []byte, packets []IsoPacket) ([]byte, []IsoPacket)
++}
++
++// IsoOutPacingDevice opts an output stream into sample-clock completion pacing.
++// Bytes per frame counts every interleaved channel, not just haptic channels.
++type IsoOutPacingDevice interface {
++	IsoOutFormat(ep uint32) (bytesPerFrame, sampleRate uint32, enabled bool)
 +}
 +
 +// InterfaceAltDevice lets composite devices observe and report active alternate

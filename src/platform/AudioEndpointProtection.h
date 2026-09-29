@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -39,6 +40,7 @@ public:
     [[nodiscard]] bool captured() const noexcept;
     [[nodiscard]] AudioDefaultProtectionStatus status() const noexcept;
     [[nodiscard]] std::size_t restoredRoles() const noexcept;
+    [[nodiscard]] std::array<std::wstring,3> defaultEndpointIds() const;
 
 private:
     struct Impl;

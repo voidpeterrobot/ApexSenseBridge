@@ -6,7 +6,7 @@ int main() {
     using asb::platform::detail::matchesVirtualDualSenseAudioIdentity;
 
     assert(matchesVirtualDualSenseAudioIdentity(
-        L"USB\\VID_054C&PID_0CE6&MI_00\\3&253044F8&0&0000", L""));
+        L"USB\\VID_054C&PID_0CE6&MI_00\\SYNTHETIC_INSTANCE", L""));
     assert(matchesVirtualDualSenseAudioIdentity(
         L"usb\\vid_054c&pid_0ce6&mi_00\\virtual", L""));
     assert(matchesVirtualDualSenseAudioIdentity(L"", L"Wireless Controller"));

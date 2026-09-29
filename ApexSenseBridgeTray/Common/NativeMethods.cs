@@ -64,6 +64,29 @@ namespace ApexSenseBridgeTray.Common
             return new uint[0];
         }
 
+        public static bool HasProcessExited(uint processId)
+        {
+            return HasProcessExited(processId, () => {
+                using (var process = System.Diagnostics.Process.GetProcessById((int)processId))
+                    return process.HasExited;
+            }, GetProcessIds);
+        }
+
+        internal static bool HasProcessExited(uint processId, Func<bool> queryExit, Func<uint[]> enumerate)
+        {
+            try { return queryExit(); }
+            catch (ArgumentException) { return true; }
+            catch (Exception) {
+                // Protected games may deny process handles while still running.
+                // A failed/empty enumeration is unknown, not evidence of exit.
+                try {
+                    var ids = enumerate();
+                    return ids != null && ids.Length > 0 && Array.IndexOf(ids, processId) < 0;
+                }
+                catch { return false; }
+            }
+        }
+
         public static string GetActiveProcessPath(IntPtr hwnd, out uint processId)
         {
             processId = 0;

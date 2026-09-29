@@ -1,0 +1,3 @@
+# Unified patches contain required context-prefix spaces before tabs and on
+# otherwise empty lines. Do not treat that syntax as source whitespace errors.
+third_party/viiper-patches/*.patch -whitespace

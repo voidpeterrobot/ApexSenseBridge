@@ -49,7 +49,7 @@ void printUsage() {
     std::cout
         << "ApexSenseBridge 0.6.3\n\n"
         << "Commands:\n"
-        << "  list                         List APEX 4/5 vendor HID candidates\n"
+        << "  list                         List APEX 4/5 and verified Apex6 Pro USB candidates\n"
         << "  diagnose [--all-hid] [--json]\n"
         << "                               Read-only HID interface diagnostic\n"
         << "  input-status [index] [--seconds N] [--json]\n"
@@ -70,6 +70,7 @@ void printUsage() {
         << "                  [--view-hold-swipe-up]\n"
         << "                  [--isolate-apex]\n"
         << "                  [--session-token 32HEX]\n"
+        << "                  [--controller-model apex6-pro] [--apex6-beta-consent] [--grip-gain 0..12]\n"
         << "                               Route adaptive triggers and optional grip/audio haptics\n"
         << "  test-rt [index]              Gentle RT FORCEADAPT test (~1.5 s)\n"
         << "  test-rumble [index]          Gentle grip-motor vibration test (~1 s)\n"
@@ -83,6 +84,8 @@ void printUsage() {
         << "  dry-run                      Print the test packet without HID I/O\n\n"
         << "Hardware writes only target a verified Apex 4 (04B4:2412, DInput) or\n"
         << "Apex 5 (Flydigi 37D7 controller family). Pass an index if several are found.\n"
+        << "Apex6 Pro USB (37D7:2502) uses an opt-in grip-only beta; no triggers/profiles/wireless.\n"
+        << "Start Apex6 before the game. Q stops; +/- adjust gain; 0 mutes; 1 resets.\n"
         << "virtual-ds never opens the APEX HID interface and never routes feedback to it.\n";
 }
 

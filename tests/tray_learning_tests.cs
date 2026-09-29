@@ -31,6 +31,9 @@ internal static class TrayLearningTests
             TestRepeatedObservationDoesNotRestartStabilityWindow(testRoot);
             TestImmediateShutdownFlushesValidatedBinding(testRoot);
             TestLimitedInformationProcessPathLookup();
+            TestProtectedGameProcessLifetime();
+            TestWhitelistAndPreparedLaunch();
+            TestElevatedGameLaunch();
             TestCorruptAndOversizedCaches(testRoot);
             TestAmbiguousSteamAppIdFallsBackToNormalizedIdentity(testRoot);
             TestDatabaseExecutableResolutionAndCollisions();
@@ -55,6 +58,101 @@ internal static class TrayLearningTests
         {
             try { Directory.Delete(testRoot, true); } catch { }
         }
+    }
+
+    private static void TestProtectedGameProcessLifetime()
+    {
+        Func<bool> denied = () => { throw new System.ComponentModel.Win32Exception(5); };
+        Assert(!NativeMethods.HasProcessExited(42, denied, () => new uint[] { 0, 42, 99 }),
+            "a protected running game must retain its bridge");
+        Assert(NativeMethods.HasProcessExited(42, denied, () => new uint[] { 0, 99 }),
+            "a protected game absent from a complete snapshot has exited");
+        Assert(!NativeMethods.HasProcessExited(42, denied, () => new uint[0]),
+            "an unavailable PID snapshot must not falsely stop the bridge");
+        Assert(!NativeMethods.HasProcessExited(42, denied, () => { throw new IOException(); }),
+            "an enumeration exception must not falsely stop the bridge");
+        Assert(NativeMethods.HasProcessExited(42, () => true, () => { throw new Exception(); }),
+            "a successful exit query needs no fallback enumeration");
+        Assert(!NativeMethods.HasProcessExited(42, () => false, () => { throw new Exception(); }),
+            "a successful running query needs no fallback enumeration");
+        Assert(NativeMethods.HasProcessExited(42, () => { throw new ArgumentException(); }, () => new uint[0]),
+            "a missing process is confirmed exited");
+    }
+
+    private static void TestWhitelistAndPreparedLaunch()
+    {
+        var settings = new System.Web.Script.Serialization.JavaScriptSerializer()
+            .Deserialize<TraySettings>("{\"AutoDetectGames\":false,\"ExcludedGames\":[\"Existing\"]}");
+        Assert(settings.GetLaunchWhitelist().Length == 0 && settings.IsGameExcluded("Existing"),
+            "old settings migrate with an empty whitelist and preserve exclusions");
+        settings.SetLaunchWhitelisted(@"C:\Games\Example.exe", true);
+        settings.SetLaunchWhitelisted(@"c:\games\EXAMPLE.exe", true);
+        Assert(settings.GetLaunchWhitelist().Length == 1, "whitelist paths deduplicate case-insensitively");
+        Assert(settings.IsLaunchWhitelisted(@"C:\Games\Example.exe"), "exact executable path is whitelisted");
+        Assert(!settings.IsLaunchWhitelisted(@"D:\Other\Example.exe") && !settings.IsLaunchWhitelisted("Example.exe"),
+            "same-name executables outside the whitelist are not authorized");
+        var copy = settings.GetLaunchWhitelist(); copy[0] = "changed";
+        Assert(settings.IsLaunchWhitelisted(@"C:\Games\Example.exe"), "whitelist snapshots cannot modify settings");
+        var json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(settings);
+        var reloaded = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<TraySettings>(json);
+        Assert(reloaded.IsLaunchWhitelisted(@"C:\Games\Example.exe") && !reloaded.AutoDetectGames,
+            "whitelist persists without changing automatic detection settings");
+        settings.SetLaunchWhitelisted(@"C:\Games\Example.exe", false);
+        Assert(settings.GetLaunchWhitelist().Length == 0, "removing a whitelisted executable revokes launch authorization");
+        bool invalid = false;
+        try { settings.SetLaunchWhitelisted("Example.exe", true); } catch (ArgumentException) { invalid = true; }
+        Assert(invalid, "relative executable paths are rejected");
+        var events = new System.Collections.Generic.List<string>();
+        PreparedGameLaunch.Run(() => events.Add("ready"), () => true, () => events.Add("launch"), () => events.Add("stop"));
+        Assert(string.Join(",", events) == "ready,launch", "game starts only after successful readiness");
+        events.Clear();
+        try { PreparedGameLaunch.Run(() => { throw new IOException("not ready"); }, () => true,
+            () => events.Add("launch"), () => events.Add("stop")); } catch (IOException) { }
+        Assert(events.Count == 0, "failed preparation never launches a game or stops an unowned session");
+        events.Clear();
+        try { PreparedGameLaunch.Run(() => events.Add("ready"), () => false,
+            () => events.Add("launch"), () => events.Add("stop")); } catch (InvalidOperationException) { }
+        Assert(string.Join(",", events) == "ready,stop", "bridge failure between readiness and launch rolls back without launching");
+        events.Clear();
+        try { PreparedGameLaunch.Run(() => events.Add("ready"), () => true,
+            () => { throw new IOException("launch failed"); }, () => events.Add("stop")); } catch (IOException) { }
+        Assert(string.Join(",", events) == "ready,stop", "failed game creation restores the prepared controller");
+    }
+
+    private static void TestElevatedGameLaunch()
+    {
+        int calls = 0;
+        PreparedGameLaunch.StartGame(@"C:\Games\Example.exe", info => {
+            calls++;
+            Assert(!info.UseShellExecute && string.IsNullOrEmpty(info.Verb), "normal games launch without elevation");
+            return null;
+        });
+        Assert(calls == 1, "successful normal launch is never repeated");
+        calls = 0;
+        PreparedGameLaunch.StartGame(@"C:\Games\Example.exe", info => {
+            calls++;
+            Assert(info.FileName == @"C:\Games\Example.exe" && info.WorkingDirectory == @"C:\Games",
+                "elevation preserves the authorized executable and working directory");
+            if (calls == 1) throw new System.ComponentModel.Win32Exception(740);
+            Assert(info.UseShellExecute && info.Verb == "runas", "required elevation uses the Windows approval prompt");
+            return null;
+        });
+        Assert(calls == 2, "elevation-required failure is retried exactly once");
+        calls = 0; bool denied = false;
+        try {
+            PreparedGameLaunch.StartGame(@"C:\Games\Example.exe", info => {
+                calls++; throw new System.ComponentModel.Win32Exception(5);
+            });
+        } catch (System.ComponentModel.Win32Exception) { denied = true; }
+        Assert(denied && calls == 1, "unrelated access-denied errors do not trigger elevation");
+        calls = 0; bool cancelled = false; bool stopped = false;
+        try {
+            PreparedGameLaunch.Run(() => { }, () => true,
+                () => PreparedGameLaunch.StartGame(@"C:\Games\Example.exe", info => {
+                    calls++; throw new System.ComponentModel.Win32Exception(calls == 1 ? 740 : 1223);
+                }), () => stopped = true);
+        } catch (InvalidOperationException ex) { cancelled = ex.Message.Contains("cancelled"); }
+        Assert(cancelled && stopped && calls == 2, "cancelled administrator prompt stops the prepared bridge without retrying");
     }
 
     private static void TestReleaseAssetPolicy()
@@ -417,6 +515,14 @@ internal static class TrayLearningTests
 
     private static void TestPerGameApexProfileSettings()
     {
+        Assert(GameActivationPolicy.IsPassiveManualMode("standard", false),
+            "Legacy manual sessions must remain independent of game lifetime.");
+        Assert(!GameActivationPolicy.IsPassiveManualMode("standard", true),
+            "Apex6 pre-started sessions must adopt a detected game and stop at game exit.");
+        Assert(!GameActivationPolicy.IsPassiveManualMode("none", false),
+            "Normal automatic detection was disabled.");
+        Assert(!GameActivationPolicy.IsPassiveManualMode(null, true),
+            "Apex6 game lifetime requires no forced-profile setting.");
         var settings = new TraySettings();
         Assert(settings.GetApexProfileSlot("spiderman2") == 0,
             "A game without an override did not keep the current Apex profile.");

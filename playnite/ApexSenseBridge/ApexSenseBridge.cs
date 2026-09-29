@@ -17,6 +17,9 @@ namespace ApexSenseBridge
         private readonly object sessionLock = new object();
         private readonly ApexSenseBridgeSettingsViewModel settings;
         private BridgeSession activeSession;
+        private bool apex6Session;
+        internal static Action<double> LiveGripControl;
+        internal static Func<string> GripStatus;
         private Guid activeGameId;
 
         public override Guid Id { get; } = Guid.Parse("e41b1737-6753-4b59-bc65-4fdd6a7df7f4");
@@ -141,7 +144,10 @@ namespace ApexSenseBridge
                     return;
                 }
 
-                var arguments = BuildBridgeArguments(profile);
+                bool apex6;
+                try { apex6 = Shared.Apex6Beta.SelectedControllerIsApex6(bridgeExecutable); }
+                catch (Exception ex) { CancelStartup(args, ex.Message); return; }
+                var arguments = BuildBridgeArguments(profile, apex6);
                 string error;
                 var session = BridgeSession.TryStart(
                     bridgeExecutable,
@@ -156,6 +162,9 @@ namespace ApexSenseBridge
                 }
 
                 activeSession = session;
+                apex6Session = apex6;
+                LiveGripControl = gain => { lock (sessionLock) { if (activeSession != null && apex6Session) activeSession.SetGripGain(gain); } };
+                GripStatus = () => { lock (sessionLock) { return activeSession != null && apex6Session ? activeSession.StatusMessage : "No Apex6 session"; } };
                 activeGameId = args.Game.Id;
                 logger.Info($"ApexSenseBridge ready for {args.Game.Name} ({args.Game.Id}).");
             }
@@ -335,9 +344,11 @@ namespace ApexSenseBridge
             SavePluginSettings(value);
         }
 
-        private string BuildBridgeArguments(GameBridgeProfile profile)
+        private string BuildBridgeArguments(GameBridgeProfile profile, bool apex6 = false)
         {
             var arguments = new List<string> { "bridge-triggers" };
+            if (apex6) arguments.Add("--controller-model apex6-pro");
+            if (Shared.Apex6Beta.ControllerIndex.HasValue) arguments.Add(Shared.Apex6Beta.ControllerIndex.Value.ToString());
 
             var gestureProfile = profile.ProfileType;
 
@@ -374,8 +385,7 @@ namespace ApexSenseBridge
             if (settings.Settings.EnableRumble)
             {
                 arguments.Add("--rumble");
-                arguments.Add("--haptic-threshold");
-                arguments.Add(settings.Settings.HapticThresholdPercent.ToString());
+                if (!apex6) { arguments.Add("--haptic-threshold"); arguments.Add(settings.Settings.HapticThresholdPercent.ToString()); }
             }
 
             return string.Join(" ", arguments);

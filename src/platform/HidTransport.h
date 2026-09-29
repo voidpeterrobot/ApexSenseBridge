@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/DeviceInfo.h"
+#include "platform/HidDiscovery.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,7 +37,6 @@ public:
         std::string& error) = 0;
 };
 
-[[nodiscard]] std::vector<HidDeviceInfo> enumerateHidDevices(std::string& error);
 [[nodiscard]] HidTransport* createHidTransport(const HidDeviceInfo& info, std::string& error);
 void destroyHidTransport(HidTransport* transport) noexcept;
 

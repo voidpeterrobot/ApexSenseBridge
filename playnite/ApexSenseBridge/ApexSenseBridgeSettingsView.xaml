@@ -35,6 +35,7 @@
             <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4,12,10"
                        VerticalAlignment="Center" Text="Installation" />
             <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10">
+                <ContentControl x:Name="GripControlsHost" Margin="0,0,0,16"/>
                 <TextBlock FontWeight="SemiBold" Text="{Binding InstallationStatus}" />
                 <TextBlock Margin="0,3,0,0" Opacity="0.7" TextWrapping="Wrap"
                            Text="{Binding InstalledExecutablePath}" />

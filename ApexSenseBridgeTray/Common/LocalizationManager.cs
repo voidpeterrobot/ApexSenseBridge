@@ -23,7 +23,7 @@ namespace ApexSenseBridgeTray.Common
         {
             // General & App
             { "Loc_AppName", "ApexSenseBridge" },
-            { "Loc_AppSubtitle", "DualSense \u2192 Flydigi APEX 4 / APEX 5 Bridge" },
+            { "Loc_AppSubtitle", "DualSense \u2192 APEX 4 / 5 / 6 Pro (beta)" },
             { "Loc_AlreadyRunning", "ApexSenseBridge Tray is already running in the system tray." },
             { "Loc_StartupError", "Startup error: " },
             { "Loc_Close", "Close" },
@@ -165,7 +165,7 @@ namespace ApexSenseBridgeTray.Common
         {
             // General & App
             { "Loc_AppName", "ApexSenseBridge" },
-            { "Loc_AppSubtitle", "Pont DualSense \u2192 Flydigi APEX 4 / APEX 5" },
+            { "Loc_AppSubtitle", "Pont DualSense \u2192 APEX 4 / 5 / 6 Pro (bêta)" },
             { "Loc_AlreadyRunning", "ApexSenseBridge Tray est déjà en cours d'exécution dans la barre des tâches." },
             { "Loc_StartupError", "Erreur de démarrage : " },
             { "Loc_Close", "Fermer" },

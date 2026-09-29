@@ -1,4 +1,7 @@
 #include "cli/Commands.h"
+#include "cli/BridgeOptions.h"
+#include "core/ControllerCapabilities.h"
+#include "platform/Apex6Settings.h"
 #include "cli/CommandSupport.h"
 #include "core/ApexProfileRestoreGuard.h"
 #include "core/TriggerResetGuard.h"
@@ -198,32 +201,22 @@ private:
 
 } // namespace
 
-struct BridgeCommandOptions {
-    std::optional<std::size_t> deviceIndex;
-    std::optional<std::chrono::seconds> duration;
-    std::filesystem::path viiperExecutable;
-    asb::dualsense::VirtualDualSenseBackend virtualBackend =
-        asb::dualsense::VirtualDualSenseBackend::Auto;
-    bool proxyXInput = true;
-    bool routeRumble = false;
-    bool verifyVirtualInput = false;
-    bool isolateApex = true;
-    asb::dualsense::TouchpadGestureProfile touchpadProfile =
-        asb::dualsense::TouchpadGestureProfile::None;
-    bool touchpadProfileExplicit = false;
-    unsigned int hapticThresholdPercent = 12;
-    bool hapticThresholdExplicit = false;
-    std::optional<unsigned int> xinputIndex;
-    std::optional<std::string> sessionToken;
-    std::optional<std::uint8_t> apexProfileSlot;
-    std::filesystem::path telemetryJson;
-};
-
 bool parseBridgeOptions(int argc, char** argv, BridgeCommandOptions& options,
                         std::string& error) {
     for (int i = 2; i < argc; ++i) {
         const std::string_view value = argv[i];
-        if (value == "--seconds") {
+        if (value == "--controller-model") {
+            if(++i>=argc||std::string_view(argv[i])!="apex6-pro"){error="--controller-model currently accepts apex6-pro.";return false;}
+            options.requireApex6=true;
+        } else if (value == "--apex6-beta-consent") {
+            options.apex6Consent=true;
+        } else if (value == "--grip-gain") {
+            if(++i>=argc){error="--grip-gain requires a finite number from 0 to 12.";return false;}
+            try {std::size_t used=0;double gain=std::stod(argv[i],&used);
+                if(used!=std::string_view(argv[i]).size()||!platform::validGripGain(gain))throw std::out_of_range("gain");
+                options.gripGain=gain;
+            }catch(...){error="--grip-gain requires a finite number from 0 to 12.";return false;}
+        } else if (value == "--seconds") {
             if (++i >= argc) { error = "--seconds requires an integer from 1 to 86400."; return false; }
             try {
                 const auto seconds = std::stoul(argv[i]);
@@ -390,7 +383,22 @@ int commandBridgeTriggers(int argc, char** argv) {
         return exitCode;
     };
 
-    auto device = openSelectedIndex(options.deviceIndex, error);
+    const auto candidates=asb::flydigi::Apex5Device::findCandidates(error);
+    if(!error.empty()||candidates.empty()||(!options.deviceIndex&&candidates.size()>1)||options.deviceIndex.value_or(0)>=candidates.size()) {
+        if(error.empty())error=candidates.empty()?"No eligible APEX controller found.":"Select exactly one controller using the index from 'list'.";
+        return failSession(3,error);
+    }
+    const auto& selected=candidates[options.deviceIndex.value_or(0)];
+    if(asb::isApex6Vendor(selected)) {
+#ifdef _WIN32
+        return commandApex6Bridge(selected,options,sessionControl.get(),*globalSessionStop);
+#else
+        return failSession(3,"Apex6 integrated beta requires Windows.");
+#endif
+    }
+    if(options.requireApex6||options.apex6Consent||options.gripGain)return failSession(1,"Apex6 beta options require a selected Apex6 Pro USB controller.");
+    auto device = asb::flydigi::Apex5Device::open(selected,error);
+    if(device&&!device->verifyIdentity(error))device.reset();
     if (!device) {
         const std::string message = "APEX identity check failed: " + error;
         std::cerr << message << '\n';

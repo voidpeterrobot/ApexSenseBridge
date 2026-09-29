@@ -18,6 +18,7 @@ namespace ApexSenseBridgeTray.Models
         public string Language { get; set; }
         public List<string> ExcludedGames { get; set; }
         public Dictionary<string, int> ApexProfileSlots { get; set; }
+        public List<string> LaunchWhitelist { get; set; }
 
         public TraySettings()
         {
@@ -32,6 +33,33 @@ namespace ApexSenseBridgeTray.Models
             Language = "auto";
             ExcludedGames = new List<string>();
             ApexProfileSlots = new Dictionary<string, int>();
+            LaunchWhitelist = new List<string>();
+        }
+
+        public string[] GetLaunchWhitelist()
+        {
+            lock (this) { return LaunchWhitelist == null ? new string[0] : LaunchWhitelist.ToArray(); }
+        }
+
+        public bool IsLaunchWhitelisted(string executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath) || !Path.IsPathRooted(executablePath)) return false;
+            foreach (var path in GetLaunchWhitelist())
+                if (string.Equals(path, executablePath, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public void SetLaunchWhitelisted(string executablePath, bool enabled)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath) || !Path.IsPathRooted(executablePath) ||
+                !string.Equals(Path.GetExtension(executablePath), ".exe", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Select a game executable using its full path.");
+            var path = Path.GetFullPath(executablePath);
+            lock (this) {
+                if (LaunchWhitelist == null) LaunchWhitelist = new List<string>();
+                LaunchWhitelist.RemoveAll(item => string.Equals(item, path, StringComparison.OrdinalIgnoreCase));
+                if (enabled) LaunchWhitelist.Add(path);
+            }
         }
 
         public bool IsGameExcluded(string normalizedOrTitle)

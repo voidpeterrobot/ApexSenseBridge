@@ -16,6 +16,24 @@ namespace ApexSenseBridgeTray.Services
         private string activeGameTitle;
         private string activeProfile;
         private bool isStarting;
+        private bool apex6Session, prestarted;
+        private bool prestartWarningShown;
+        private string lastGripStatus = "No Apex6 session";
+        public void MarkGameLaunched() { lock (syncLock) { prestarted = false; } }
+        public bool HasActiveApex6Session { get { lock (syncLock) { return activeSession != null && apex6Session; } } }
+        public bool LastSessionWasApex6 { get { lock (syncLock) { return apex6Session; } } }
+        public string GripStatus { get { lock (syncLock) { return activeSession != null && apex6Session ? activeSession.StatusMessage : lastGripStatus; } } }
+        public void SetGripGain(double gain) { lock (syncLock) { if (activeSession != null && apex6Session) activeSession.SetGripGain(gain); } }
+
+        public void CheckSessionHealth()
+        {
+            string failure;
+            lock (syncLock) {
+                if (activeSession == null || activeSession.ProcessId != 0) return;
+                failure = activeSession.StatusMessage;
+            }
+            StopSession(string.IsNullOrWhiteSpace(failure) ? "Bridge process ended" : failure);
+        }
 
         public bool IsSessionActive
         {
@@ -72,22 +90,34 @@ namespace ApexSenseBridgeTray.Services
         }
 
         public bool StartSession(string gameTitle, string profileName, TraySettings settings,
-                                 int apexProfileSlot, out string error)
+                                 int apexProfileSlot, out string error, bool gameAlreadyRunning = false)
         {
             error = null;
+            bool adopted = false;
 
             lock (syncLock)
             {
-                if (activeSession != null || isStarting)
+                if (activeSession != null && apex6Session && prestarted && gameAlreadyRunning) {
+                    activeGameTitle = gameTitle; prestarted = false; adopted = true;
+                }
+                else if (activeSession != null || isStarting)
                 {
                     error = "Une session est déjà active ou en cours d'initialisation.";
                     return false;
                 }
-                isStarting = true;
+                if (!adopted) isStarting = true;
+            }
+
+            if (adopted) {
+                var handler = SessionStarted;
+                if (handler != null) handler(gameTitle, ActiveProfile);
+                RaiseLogMessage("Pre-started Apex6 session adopted by " + gameTitle + ".");
+                return true;
             }
 
             try
             {
+                if (!gameAlreadyRunning) prestartWarningShown = false;
                 if (IsExternalSessionActive())
                 {
                     error = "Une session ApexSenseBridge gérée par Playnite ou une autre application est déjà active.";
@@ -103,7 +133,18 @@ namespace ApexSenseBridgeTray.Services
                     return false;
                 }
 
-                var args = BuildArguments(profileName, settings, apexProfileSlot);
+                bool apex6;
+                try { apex6 = global::ApexSenseBridge.Shared.Apex6Beta.SelectedControllerIsApex6(enginePath); }
+                catch (Exception ex) { error = ex.Message; RaiseSessionError(error); return false; }
+                if (apex6 && gameAlreadyRunning) {
+                    error = "Close the game, add its executable to the control center's game whitelist, then click Launch. Apex6 must be ready before the game starts.";
+                    if (!prestartWarningShown) {
+                        prestartWarningShown = true;
+                        RaiseSessionError(error);
+                    }
+                    return false;
+                }
+                var args = BuildArguments(profileName, settings, apexProfileSlot, apex6);
                 RaiseLogMessage(string.Format("Starting bridge: {0} {1}", enginePath, args));
 
                 int timeoutSec = settings != null ? settings.InitializationTimeoutSeconds : 20;
@@ -126,6 +167,7 @@ namespace ApexSenseBridgeTray.Services
                     activeSession = session;
                     activeGameTitle = gameTitle;
                     activeProfile = profileName;
+                    apex6Session = apex6; prestarted = apex6 && !gameAlreadyRunning;
                 }
 
                 var startHandler = SessionStarted;
@@ -151,6 +193,7 @@ namespace ApexSenseBridgeTray.Services
             {
                 if (activeSession == null) return;
                 sessionToStop = activeSession;
+                if (apex6Session) lastGripStatus = activeSession.ProcessId == 0 ? activeSession.StatusMessage : "Stopping bridge…";
                 activeSession = null;
                 activeGameTitle = null;
                 activeProfile = null;
@@ -161,6 +204,7 @@ namespace ApexSenseBridgeTray.Services
             if (sessionToStop != null)
             {
                 sessionToStop.StopAndWait(TimeSpan.FromSeconds(15));
+                lock (syncLock) { if (apex6Session) lastGripStatus = sessionToStop.StatusMessage; }
                 sessionToStop.Dispose();
             }
 
@@ -224,9 +268,12 @@ namespace ApexSenseBridgeTray.Services
         }
 
         private static string BuildArguments(string profileName, TraySettings settings,
-                                             int apexProfileSlot)
+                                             int apexProfileSlot, bool apex6 = false)
         {
             var args = new List<string> { "bridge-triggers" };
+            if (apex6) args.Add("--controller-model apex6-pro");
+            if (global::ApexSenseBridge.Shared.Apex6Beta.ControllerIndex.HasValue)
+                args.Add(global::ApexSenseBridge.Shared.Apex6Beta.ControllerIndex.Value.ToString(CultureInfo.InvariantCulture));
 
             var profile = profileName != null ? profileName.ToLowerInvariant() : "standard";
             if (profile == "spider-man-2")
@@ -253,8 +300,7 @@ namespace ApexSenseBridgeTray.Services
             if (settings != null && settings.EnableRumble)
             {
                 args.Add("--rumble");
-                args.Add("--haptic-threshold");
-                args.Add(settings.HapticThresholdPercent.ToString());
+                if (!apex6) { args.Add("--haptic-threshold"); args.Add(settings.HapticThresholdPercent.ToString()); }
             }
 
             if (apexProfileSlot >= 1 && apexProfileSlot <= 4)

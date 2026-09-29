@@ -2,6 +2,9 @@
 
 ## OpenFlydigi
 
+Credit to [OpenFlydigi](https://github.com/mkaliaha/openflydigi) by Mikalai Kaliaha
+for the prototype development and protocol work behind the Apex6 Pro integration.
+
 The Flydigi identity request/reply layout, Apex 5 DeviceType allowlist, and
 related protocol behavior, and the DualSense adaptive-trigger translation in
 `src/dualsense/AdaptiveTriggerTranslation.*`, were ported from and
@@ -14,6 +17,24 @@ validated against OpenFlydigi:
   `flydigi/relay.py`, and `PROTOCOL.md`
 - Copyright: 2026 Mikalai Kaliaha
 - License for the referenced implementation: MIT
+
+The transport-free Apex6 codec and DSP in `src/apex6/Gpa6.*` and
+`src/apex6/GripDsp.*` additionally derives from the modified OpenFlydigi source
+in a supplied development source bundle, not the older commit above. These
+components are reused by the integrated backend. Copyright and MIT terms below
+apply. Pinned source SHA-256:
+
+- `flydigi/gpa6.py`: `f2a01cb562248e9c27125bc695d1ace3ea6f9f651aff5e533cfac21c20dba8c4`
+- `flydigi/waveform.py`: `2f62811b95e4872c6287703152a5930bc4efb0aa17d650f9d9e0036ffa6d8e5b`
+
+Offline fixture attribution and provenance are in `tests/fixtures/apex6/README.md`.
+No vendor executable is included by this port.
+
+The experimental snapshot and neutral-rehearsal sequence in
+`src/apex6/experiment/Session.*` additionally follows the same handoff's
+`flydigi/gpa6_config.py` and `flydigi/apex6_experiment.py` (MIT). Windows query-only
+transport, supervision and terminal cancellation ownership are implemented
+separately; no claim of physical lifecycle validation is inherited from that source.
 
 MIT License
 

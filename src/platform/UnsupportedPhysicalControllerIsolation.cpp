@@ -19,6 +19,10 @@ bool TemporaryPhysicalControllerIsolation::confirmApexProfileRestored(
     std::string&) noexcept { return true; }
 bool TemporaryPhysicalControllerIsolation::restore(std::string&) noexcept { return true; }
 bool TemporaryPhysicalControllerIsolation::active() const noexcept { return false; }
+bool TemporaryPhysicalControllerIsolation::healthy(std::string& error) const {
+    error = "Physical controller isolation is only available on Windows.";
+    return false;
+}
 bool TemporaryPhysicalControllerIsolation::recoveredStaleIsolation() const noexcept { return false; }
 
 bool TemporaryPhysicalControllerIsolation::recoverPending(

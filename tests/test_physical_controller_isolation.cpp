@@ -27,8 +27,8 @@ int main() {
         L"Another Controller Tool", L"Flydigi, Inc."));
 
     assert(matchesFlydigiVirtualGamepadTopology(
-        L"HID\\VID_054C&PID_0CE6&REV_0100\\2&2AF0CFB&0&0000",
-        L"USB\\VID_054C&PID_0CE6&REV_0100\\1&2CC2035A&0&01",
+        L"HID\\VID_054C&PID_0CE6&REV_0100\\SYNTHETIC_INSTANCE",
+        L"USB\\VID_054C&PID_0CE6&REV_0100\\SYNTHETIC_INSTANCE",
         L"ROOT\\GENITECH_VIRTUAL_GAMEPAD_DEVICE\\0000",
         L"hidvirtualdriver"));
     assert(matchesFlydigiVirtualGamepadTopology(
@@ -57,13 +57,13 @@ int main() {
     // ApexSenseBridge/VIIPER, physical controllers, and lookalike root/service
     // identities must all remain visible.
     assert(!matchesFlydigiVirtualGamepadTopology(
-        L"HID\\VID_054C&PID_0CE6&MI_03\\4&127B94DB&0&0000",
-        L"USB\\VID_054C&PID_0CE6\\2&3B7C36A2&0&1",
+        L"HID\\VID_054C&PID_0CE6&MI_03\\SYNTHETIC_INSTANCE",
+        L"USB\\VID_054C&PID_0CE6\\SYNTHETIC_INSTANCE",
         L"ROOT\\USBIP_VHCI\\0000", L"usbip_vhci"));
     assert(!matchesFlydigiVirtualGamepadTopology(
         L"HID\\VID_054C&PID_0CE6\\REAL",
         L"USB\\VID_054C&PID_0CE6\\REAL",
-        L"USB\\ROOT_HUB30\\4&1234&0&0", L"USBHUB3"));
+        L"USB\\ROOT_HUB30\\SYNTHETIC_INSTANCE", L"USBHUB3"));
     assert(!matchesFlydigiVirtualGamepadTopology(
         L"HID\\VID_054C&PID_0CE6\\GAMEPAD",
         L"USB\\VID_054C&PID_0CE6\\CONTAINER",

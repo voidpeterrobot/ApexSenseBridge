@@ -1,0 +1,94 @@
+{
+  "schema": "asb.apex6.official-silent-fixture.v1",
+  "capture": "apex6-official-silent-20260928-220552-696.pcap",
+  "sha256": "a701b3fe7cee7d29301e19660dd4efe0b7d19dbf80dbcd183ea092d72a8a1a45",
+  "framing": "USB body is exactly 32 bytes; Windows report adds explicit report ID 00",
+  "reply_attribution": "Not inferred: official writes were pipelined",
+  "physical_recovery": "Unverified: operator has not checked after this capture",
+  "reports": [
+    {
+      "frame": 203,
+      "relative_us": 49985042,
+      "direction": "host_to_device",
+      "usb_body_hex": "5aa55307011202400000000000000000000000000000000000000000000000af",
+      "windows_report_hex": "005aa55307011202400000000000000000000000000000000000000000000000af"
+    },
+    {
+      "frame": 204,
+      "relative_us": 49990858,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 209,
+      "relative_us": 49996854,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 371,
+      "relative_us": 79495788,
+      "direction": "host_to_device",
+      "usb_body_hex": "5aa553050112000000000000000000000000000000000000000000000000006b",
+      "windows_report_hex": "005aa553050112000000000000000000000000000000000000000000000000006b"
+    },
+    {
+      "frame": 373,
+      "relative_us": 79502425,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 376,
+      "relative_us": 79508422,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 421,
+      "relative_us": 79639602,
+      "direction": "host_to_device",
+      "usb_body_hex": "5aa55306011001400000000000000000000000000000000000000000000000ab",
+      "windows_report_hex": "005aa55306011001400000000000000000000000000000000000000000000000ab"
+    },
+    {
+      "frame": 422,
+      "relative_us": 79640428,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 425,
+      "relative_us": 79645609,
+      "direction": "host_to_device",
+      "usb_body_hex": "5aa55306011101400000000000000000000000000000000000000000000000ac",
+      "windows_report_hex": "005aa55306011101400000000000000000000000000000000000000000000000ac"
+    },
+    {
+      "frame": 426,
+      "relative_us": 79646427,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530100000000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530100000000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 429,
+      "relative_us": 79652425,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530000010000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530000010000000000000000000000000000000000000000000000000054"
+    },
+    {
+      "frame": 431,
+      "relative_us": 79658430,
+      "direction": "device_to_host",
+      "usb_body_hex": "5aa5530000010000000000000000000000000000000000000000000000000054",
+      "windows_report_hex": "005aa5530000010000000000000000000000000000000000000000000000000054"
+    }
+  ]
+}

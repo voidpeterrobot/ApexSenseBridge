@@ -27,6 +27,7 @@ public:
                   std::string& error);
     bool confirmApexProfileRestored(std::string& error) noexcept;
     bool restore(std::string& error) noexcept;
+    bool healthy(std::string& error) const;
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] bool recoveredStaleIsolation() const noexcept;
 

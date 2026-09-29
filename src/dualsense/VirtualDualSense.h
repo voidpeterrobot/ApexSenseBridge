@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+namespace asb::capture { class RawFeedbackSink; }
 namespace asb::dualsense {
 
 enum class VirtualDualSenseBackend {
@@ -22,6 +23,9 @@ struct VirtualDualSenseOptions {
     std::filesystem::path viiperLibrary;
     std::uint16_t apiPort = 3242;
     VirtualDualSenseBackend backend = VirtualDualSenseBackend::Auto;
+    // Caller owns the sink until close() completes callback unregistration.
+    // Requires the raw audio/HID/event ABI; never falls back to summaries.
+    capture::RawFeedbackSink* rawFeedbackSink = nullptr;
 };
 
 struct VirtualDualSenseStats {

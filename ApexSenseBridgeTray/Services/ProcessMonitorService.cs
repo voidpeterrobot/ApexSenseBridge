@@ -32,6 +32,7 @@ namespace ApexSenseBridgeTray.Services
         private int isPolling;
         private DateTime nextProcessSweepUtc;
         private DateTime nextForegroundCheckUtc;
+        private bool explicitlyLaunchedSession;
 
         public event Action<SupportedGame, string> GameDetected;
         public event Action<string> GameExited;
@@ -152,6 +153,48 @@ namespace ApexSenseBridgeTray.Services
             ThreadPool.QueueUserWorkItem(_ => OnPollTick(null));
         }
 
+        public void LaunchWhitelistedGame(string executablePath)
+        {
+            lock (sessionStateLock) {
+                if (isDisposed) throw new InvalidOperationException("Tray is closing.");
+                if (!settings.IsLaunchWhitelisted(executablePath)) throw new InvalidOperationException("Add this executable to the game whitelist first.");
+                if (!File.Exists(executablePath)) throw new FileNotFoundException("The whitelisted game executable is missing.", executablePath);
+                if (sessionManager.IsSessionActive || processSession.HasSession || isStoppingDetectedSession)
+                    throw new InvalidOperationException("Stop the current bridge before launching another game.");
+                // Denied path queries are treated conservatively: a same-name running game may
+                // already hold physical handles, so ask the user to close it before preparation.
+                foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executablePath))) {
+                    using (process) {
+                        var path = NativeMethods.GetProcessPath((uint)process.Id);
+                        if (string.IsNullOrEmpty(path) || string.Equals(path, executablePath, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("Close this game, then use Launch from the whitelist so the controller is ready first.");
+                    }
+                }
+                SupportedGame game;
+                if (!gameListService.TryFindByExecutable(executablePath, out game))
+                    game = new SupportedGame { Title = Path.GetFileNameWithoutExtension(executablePath), Normalized = executablePath, HapticFeedback = true };
+                PreparedGameLaunch.Run(
+                    () => {
+                        string error;
+                        if (!sessionManager.StartSession(game.Title, game.Profile, settings,
+                            settings.GetApexProfileSlot(game.Normalized), out error))
+                            throw new InvalidOperationException(error ?? "Bridge startup failed.");
+                    },
+                    () => !isDisposed && sessionManager.IsSessionHealthy,
+                    () => {
+                        using (var process = PreparedGameLaunch.StartGame(executablePath, Process.Start)) {
+                            if (process == null) throw new InvalidOperationException("The game did not start.");
+                            processSession.Start(game, (uint)process.Id, executablePath);
+                            explicitlyLaunchedSession = true;
+                            sessionManager.MarkGameLaunched();
+                        }
+                    },
+                    () => sessionManager.StopSession("Game launch failed"));
+                LogDetection("Launched whitelisted game after bridge readiness: " + executablePath);
+            }
+            ForceCheck();
+        }
+
         private void OnPollTick(object state)
         {
             if (isDisposed) return;
@@ -164,6 +207,18 @@ namespace ApexSenseBridgeTray.Services
             try
             {
                 PruneExitedTrackedProcesses();
+                sessionManager.CheckSessionHealth();
+
+                // Explicit launches retain exit tracking even if background detection is disabled.
+                lock (sessionStateLock) {
+                    if (explicitlyLaunchedSession && !sessionManager.IsSessionActive) {
+                        processSession.Clear(); explicitlyLaunchedSession = false;
+                    }
+                }
+                if (explicitlyLaunchedSession) {
+                    if (TryStopExpiredSession()) return;
+                    if (!settings.AutoDetectGames) return;
+                }
 
                 if (settings == null || !settings.AutoDetectGames)
                 {
@@ -172,7 +227,7 @@ namespace ApexSenseBridgeTray.Services
                     return;
                 }
 
-                bool passiveLearning = IsManualBridgeMode();
+                bool passiveLearning = !explicitlyLaunchedSession && IsManualBridgeMode();
                 if (passiveLearning)
                 {
                     // A forced bridge already owns the engine session. Continue
@@ -428,6 +483,14 @@ namespace ApexSenseBridgeTray.Services
             matchedBy = null;
             if (gameListService == null) return false;
 
+            // An explicitly launched custom title also needs exact-path resolution for PID handoff.
+            if (settings.IsLaunchWhitelisted(exePath)) {
+                if (!gameListService.TryFindByExecutable(exePath, out game))
+                    game = new SupportedGame { Title = Path.GetFileNameWithoutExtension(exePath), Normalized = exePath, HapticFeedback = true };
+                matchedBy = "whitelisted exact path '" + exePath + "'";
+                return true;
+            }
+
             if (learningService != null &&
                 learningService.TryResolve(exePath, gameListService, out game))
             {
@@ -564,7 +627,7 @@ namespace ApexSenseBridgeTray.Services
                         BeginExecutableObservation(pid, exePath, game, matchedBy);
                         if (!sessionManager.StartSession(
                                 game.Title, game.Profile, settings,
-                                apexProfileSlot, out error))
+                                apexProfileSlot, out error, true))
                         {
                             lock (retryCooldowns)
                             {
@@ -680,6 +743,7 @@ namespace ApexSenseBridgeTray.Services
                 isStoppingDetectedSession = true;
                 oldPath = processSession.LastKnownPath;
                 processSession.Clear();
+                explicitlyLaunchedSession = false;
             }
 
             try
@@ -803,9 +867,8 @@ namespace ApexSenseBridgeTray.Services
 
         private bool IsManualBridgeMode()
         {
-            return settings != null &&
-                   !string.IsNullOrWhiteSpace(settings.ForcedProfile) &&
-                   !string.Equals(settings.ForcedProfile, "none", StringComparison.OrdinalIgnoreCase);
+            return settings != null && GameActivationPolicy.IsPassiveManualMode(
+                settings.ForcedProfile, sessionManager.HasActiveApex6Session);
         }
 
         private void PruneExitedTrackedProcesses()
@@ -818,29 +881,9 @@ namespace ApexSenseBridgeTray.Services
 
             foreach (var processId in trackedProcessIds)
             {
-                bool hasExited = false;
-                string reason = "Process terminated";
-                try
+                if (NativeMethods.HasProcessExited(processId))
                 {
-                    using (var process = Process.GetProcessById((int)processId))
-                    {
-                        hasExited = process.HasExited;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    hasExited = true;
-                    reason = "Process exited";
-                }
-                catch (Exception)
-                {
-                    hasExited = true;
-                    reason = "Process inaccessible";
-                }
-
-                if (hasExited)
-                {
-                    HandleProcessStopped(processId, reason);
+                    HandleProcessStopped(processId, "Process exited");
                 }
             }
         }

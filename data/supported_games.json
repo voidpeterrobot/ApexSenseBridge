@@ -67,6 +67,7 @@
     {
       "title": "Arknights: Endfield",
       "normalized": "arknightsendfield",
+      "executables": ["Endfield.exe"],
       "adaptiveTriggers": true,
       "hapticFeedback": true,
       "profile": "standard",

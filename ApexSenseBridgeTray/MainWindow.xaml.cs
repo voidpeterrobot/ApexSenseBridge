@@ -5,6 +5,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -22,6 +23,7 @@ namespace ApexSenseBridgeTray
         private readonly TraySettings settings;
         private bool isInitialized;
         private UpdateInfo latestUpdateInfo;
+        private bool launchingGame;
 
         public MainWindow(
             CloudGameListService gameListService,
@@ -39,6 +41,9 @@ namespace ApexSenseBridgeTray
             this.settings = settings;
 
             InitializeComponent();
+            GripControlsHost.Content = global::ApexSenseBridge.Shared.Apex6Beta.CreateControls(
+                sessionManager.SetGripGain, () => sessionManager.GripStatus);
+            RefreshLaunchWhitelist();
 
             UpdateLanguageRadios();
 
@@ -67,6 +72,13 @@ namespace ApexSenseBridgeTray
             }));
             sessionManager.SessionStopped += (reason) => Dispatcher.BeginInvoke(new Action(() =>
             {
+                if (!sessionManager.IsSessionActive && sessionManager.LastSessionWasApex6) {
+                    settings.ForcedProfile = "none";
+                    isInitialized = false;
+                    ChkManualBridge.IsChecked = false;
+                    isInitialized = true;
+                    settings.Save();
+                }
                 try { UpdateSessionStatus(); } catch { }
             }));
             sessionManager.SessionError += (err) => Dispatcher.BeginInvoke(new Action(() =>
@@ -114,6 +126,63 @@ namespace ApexSenseBridgeTray
             RadLangFr.IsChecked = isFr;
             RadLangEn.IsChecked = !isFr;
         }
+        private void RefreshLaunchWhitelist()
+        {
+            LstLaunchWhitelist.ItemsSource = settings.GetLaunchWhitelist();
+        }
+
+        private void OnWhitelistSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (BtnLaunchWhitelistedGame == null) return;
+            BtnLaunchWhitelistedGame.IsEnabled = !launchingGame && LstLaunchWhitelist.SelectedItem != null && !sessionManager.IsSessionActive;
+            BtnRemoveWhitelistedGame.IsEnabled = !launchingGame && LstLaunchWhitelist.SelectedItem != null;
+        }
+
+        private void OnAddWhitelistedGame(object sender, RoutedEventArgs e)
+        {
+            var picker = new Microsoft.Win32.OpenFileDialog { Title = "Add a game to the whitelist", Filter = "Game executable (*.exe)|*.exe", CheckFileExists = true };
+            if (picker.ShowDialog(this) != true) return;
+            try {
+                settings.SetLaunchWhitelisted(picker.FileName, true); settings.Save();
+                RefreshLaunchWhitelist(); LstLaunchWhitelist.SelectedItem = picker.FileName;
+            } catch (Exception ex) { TxtLaunchStatus.Text = ex.Message; }
+        }
+
+        private void OnRemoveWhitelistedGame(object sender, RoutedEventArgs e)
+        {
+            var path = LstLaunchWhitelist.SelectedItem as string;
+            if (path == null) return;
+            settings.SetLaunchWhitelisted(path, false); settings.Save(); RefreshLaunchWhitelist();
+        }
+
+        private async void OnLaunchWhitelistedGame(object sender, RoutedEventArgs e)
+        {
+            var path = LstLaunchWhitelist.SelectedItem as string;
+            if (path == null || launchingGame) return;
+            launchingGame = true;
+            BtnAddWhitelistedGame.IsEnabled = false;
+            ChkManualBridge.IsEnabled = false;
+            BtnStopBridge.IsEnabled = false;
+            OnWhitelistSelectionChanged(null, null);
+            TxtLaunchStatus.Text = "Preparing controller… The game will start after the bridge is ready.";
+            try {
+                await Task.Run(() => monitorService.LaunchWhitelistedGame(path));
+                TxtLaunchStatus.Text = "Game launched. The bridge will stop when the game exits.";
+            } catch (Exception ex) { TxtLaunchStatus.Text = ex.Message; }
+            finally {
+                launchingGame = false;
+                BtnAddWhitelistedGame.IsEnabled = true;
+                ChkManualBridge.IsEnabled = true;
+                UpdateSessionStatus();
+            }
+        }
+
+        private async void OnStopBridge(object sender, RoutedEventArgs e)
+        {
+            BtnStopBridge.IsEnabled = false;
+            await Task.Run(() => sessionManager.StopSession("Stopped from control center"));
+            UpdateSessionStatus();
+        }
 
         private void OnLanguageOptionChecked(object sender, RoutedEventArgs e)
         {
@@ -143,6 +212,9 @@ namespace ApexSenseBridgeTray
 
         public void UpdateSessionStatus()
         {
+            OnWhitelistSelectionChanged(null, null);
+            BtnStopBridge.IsEnabled = sessionManager.IsSessionActive && !launchingGame;
+            PillTriggers.Visibility = sessionManager.HasActiveApex6Session ? Visibility.Collapsed : Visibility.Visible;
             if (sessionManager.IsSessionActive)
             {
                 BadgeStatus.SetResourceReference(Border.BackgroundProperty, "BadgeActiveBg");
@@ -284,7 +356,13 @@ namespace ApexSenseBridgeTray
             {
                 sessionManager.StopSession("Switching to manual bridge mode");
                 string error;
-                sessionManager.StartSession(LocalizationManager.Get("Loc_ManualBridgeGameTitle"), "standard", settings, out error);
+                if (!sessionManager.StartSession(LocalizationManager.Get("Loc_ManualBridgeGameTitle"), "standard", settings, out error)) {
+                    isInitialized = false;
+                    ChkManualBridge.IsChecked = false;
+                    isInitialized = true;
+                    settings.ForcedProfile = "none";
+                    settings.Save();
+                }
                 monitorService.ForceCheck();
             }
             else

@@ -31,6 +31,9 @@ namespace ApexSenseBridge
         private readonly MemoryMappedViewAccessor statusView;
         private readonly Process process;
         private bool disposed;
+        private string sessionToken;
+        public string StatusMessage { get { if (disposed) return "Session ended"; var count = Math.Min(statusView.ReadUInt32(12), 495u); var bytes = new byte[(int)count]; statusView.ReadArray(16, bytes, 0, bytes.Length); return Encoding.UTF8.GetString(bytes); } }
+        public void SetGripGain(double gain) { if (disposed || process.HasExited) throw new IOException("Session has ended."); Shared.Apex6Beta.SendGain(sessionToken, gain); }
 
         private BridgeSession(
             ILogger logger,
@@ -112,6 +115,7 @@ namespace ApexSenseBridge
                 process.BeginErrorReadLine();
 
                 var session = new BridgeSession(logger, ready, stop, mapping, view, process);
+                session.sessionToken = token;
                 ready = null;
                 stop = null;
                 mapping = null;

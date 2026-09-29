@@ -842,6 +842,10 @@ public:
         // A closed backend is intentionally retained so callers can read its
         // final counters. Drop it only when starting a new session.
         active_.reset();
+        if (options_.rawFeedbackSink && options_.backend == VirtualDualSenseBackend::Sidecar) {
+            error = "Raw Apex6 feedback requires the integrated backend; sidecar is unsupported.";
+            return false;
+        }
 
         std::string integratedError;
         if (options_.backend != VirtualDualSenseBackend::Sidecar) {
@@ -851,7 +855,7 @@ public:
                 error.clear();
                 return true;
             }
-            if (options_.backend == VirtualDualSenseBackend::Integrated) {
+            if (options_.backend == VirtualDualSenseBackend::Integrated || options_.rawFeedbackSink) {
                 error = std::move(integratedError);
                 return false;
             }

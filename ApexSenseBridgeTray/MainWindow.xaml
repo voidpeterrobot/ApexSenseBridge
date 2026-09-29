@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ApexSenseBridge"
         Icon="Resources/app.ico"
-        Height="630" Width="480"
+        Height="740" Width="600" MinHeight="520" MinWidth="480"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="NoResize"
+        ResizeMode="CanResizeWithGrip"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -301,6 +301,35 @@
                     </Border>
 
                     <Border CornerRadius="8" Background="{DynamicResource CardBackground}"
+                            BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Padding="20,16" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="Game whitelist" FontSize="13.5" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"/>
+                            <TextBlock Text="Launch a game here to prepare the controller automatically. The bridge stops when the game exits. Choose the game executable, not its launcher."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,10"/>
+                            <ListBox x:Name="LstLaunchWhitelist" MinHeight="55" MaxHeight="150" Background="{DynamicResource ControlBackground}" Foreground="{DynamicResource TextPrimary}"
+                                     BorderBrush="{DynamicResource ControlBorder}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnWhitelistSelectionChanged">
+                                <ListBox.ItemTemplate><DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" ToolTip="{Binding}" Margin="2,4"/>
+                                </DataTemplate></ListBox.ItemTemplate>
+                            </ListBox>
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button x:Name="BtnAddWhitelistedGame" Content="Add game…" Style="{StaticResource BtnSecondary}" Click="OnAddWhitelistedGame" Margin="0,0,8,8"/>
+                                <Button x:Name="BtnRemoveWhitelistedGame" Content="Remove" Style="{StaticResource BtnSecondary}" Click="OnRemoveWhitelistedGame" IsEnabled="False" Margin="0,0,8,8"/>
+                                <Button x:Name="BtnLaunchWhitelistedGame" Content="Launch" Style="{StaticResource BtnPrimary}" Click="OnLaunchWhitelistedGame" IsEnabled="False" Margin="0,0,0,8"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="TxtLaunchStatus" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border CornerRadius="8" Background="{DynamicResource CardBackground}"
+                            BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Padding="20,16" Margin="0,0,0,10">
+                        <StackPanel>
+                            <ContentControl x:Name="GripControlsHost" Foreground="{DynamicResource TextPrimary}"/>
+                            <Button x:Name="BtnStopBridge" Content="Stop bridge" Style="{StaticResource BtnSecondary}" HorizontalAlignment="Left" Click="OnStopBridge" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border CornerRadius="8" Background="{DynamicResource CardBackground}"
                             BorderBrush="{DynamicResource CardBorder}" BorderThickness="1"
                             Padding="20,16" Margin="0,0,0,10">
                         <StackPanel>
@@ -394,7 +423,6 @@
                                                FontSize="11" Foreground="{DynamicResource TextMuted}"/>
                                 </StackPanel>
                             </DockPanel>
-
                             <Border Height="1" Background="{DynamicResource CardBorder}" Margin="0,0,0,14"/>
 
                             <DockPanel>

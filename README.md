@@ -1,5 +1,11 @@
 # ApexSenseBridge 0.6.3
 
+**Development build: Apex6 Pro integrated beta.** Direct USB grip output is now
+available through `bridge-triggers`, Tray manual pre-start, and Playnite's
+pre-launch hook. Opt-in is disabled by default. Adaptive triggers, wireless and
+onboard-profile switching remain unsupported on Apex6. Integrated hardware
+qualification is pending. See [setup and qualification](docs/APEX6_INTEGRATED_BETA.md).
+
 > **Bridge your Flydigi APEX 4 & APEX 5 controller into a native virtual PlayStation 5 DualSense on Windows.**  
 > Experience authentic in-game Adaptive Triggers (FORCEADAPT), rich Haptic Feedback, motion gestures, and verified touchpad shortcuts with sub-2 ms latency.
 
@@ -181,8 +187,8 @@ ApexSenseBridge.exe restore-controller-visibility
 
 ### Requirements
 - Windows 10 / 11 x64
-- Visual Studio 2022 (Desktop C++ & Windows SDK)
-- CMake 3.25+
+- Visual Studio 2022 or 2026 (Desktop C++ & Windows SDK)
+- CMake 3.25+ (4.2+ for Visual Studio 2026)
 - Inno Setup 6 (for packaging)
 
 ```powershell
@@ -192,9 +198,37 @@ ctest --test-dir .\build-win -C Release --output-on-failure
 
 # 2. Build VIIPER backend and installer
 .\scripts\build-libviiper-windows.ps1
+.\scripts\build-viiper-windows.ps1  # Requires Go on PATH; installer also needs this sidecar
 .\scripts\build-installer.ps1
 .\scripts\verify-version-consistency.ps1 -CheckArtifacts
 ```
+
+Opt-in Apex6 Pro grip streaming is available through the normal application;
+see the [integrated beta guide](docs/APEX6_INTEGRATED_BETA.md),
+[engineering findings](docs/APEX6_FINDINGS.md), and
+[verification status](docs/APEX6_INTEGRATED_VERIFICATION.md). Adaptive triggers,
+wireless connections and onboard-profile switching remain unsupported on Apex6.
+The separate `ApexSenseBridgeCapture.exe` provides output-isolated input and
+original DualSense PCM [diagnostics](docs/APEX6_CAPTURE.md).
+
+The separate `ApexSenseBridgeHapticOffline.exe` now provides an
+[offline Apex6Pro GPA6 codec, signed-PCM DSP, and WAV-to-packet preview](docs/APEX6_HAPTICS_OFFLINE.md).
+It has no device transport and cannot enable physical haptics.
+
+An opt-in [Apex6 query-only experiment utility](docs/APEX6_EXPERIMENT.md) adds
+explicit shared/exclusive readback, cooperative session locking, and offline
+neutral-lifecycle rehearsal. A separately built neutral-only executable adds
+physical lifecycle qualification behind exact-manifest, interactive five-minute
+approval. The query tool still cannot send actuator commands. Neither experiment
+is included in release packages; shared readback and physical neutral recovery
+retain their separate diagnostic approval requirements.
+
+The separate opt-in `ApexSenseBridgeApex6LiveBridge.exe` now implements
+[experimental original-PCM grip streaming](docs/APEX6_LIVE_BRIDGE.md), with fresh
+live-scope approval, console gain controls, native output limits, and sessions up
+to 60 seconds. Use `scripts/Invoke-Apex6LiveBridge.ps1` for supervised fixture and
+native-game diagnostics. It is not packaged; normal sessions use the integrated
+backend and its readiness, ownership and stop lifecycle instead.
 
 Before publishing a tag, follow the clean-VM matrix in
 [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md). The release workflow rejects a
@@ -203,5 +237,9 @@ tag/version mismatch, a stale package, a bad checksum or an unsigned payload.
 ---
 
 ## 📄 License & Third-Party Notices
+
+Credit to [OpenFlydigi](https://github.com/mkaliaha/openflydigi) by Mikalai Kaliaha
+for the prototype development and protocol work behind the Apex6 Pro integration.
+
 - Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 - Uses patched components from VIIPER, usbip-win2, and HidHide. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

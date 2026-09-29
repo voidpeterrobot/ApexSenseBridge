@@ -95,6 +95,7 @@
     <Compile Include="Services\ExecutableLearningService.cs" />
     <Compile Include="Services\GameProcessSessionTracker.cs" />
     <Compile Include="Services\GameActivationPolicy.cs" />
+    <Compile Include="Services\PreparedGameLaunch.cs" />
     <Compile Include="Services\PlatformClientProcessFilter.cs" />
     <Compile Include="Services\ProcessMonitorService.cs" />
     <Compile Include="Services\EngineSessionManager.cs" />
@@ -102,6 +103,7 @@
     <Compile Include="..\shared\ReleaseSecurity.cs">
       <Link>Common\ReleaseSecurity.cs</Link>
     </Compile>
+    <Compile Include="..\shared\Apex6Beta.cs"><Link>Common\Apex6Beta.cs</Link></Compile>
     <Compile Include="Common\NativeMethods.cs" />
     <Compile Include="Common\AppLog.cs" />
     <Compile Include="Common\BridgeSession.cs" />

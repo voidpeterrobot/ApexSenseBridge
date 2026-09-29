@@ -1,5 +1,7 @@
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$ReleaseDirectory = "",
+    [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,6 +9,8 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $projectRoot "build-win\Release"
 $distDir = Join-Path $projectRoot "dist"
+if ($ReleaseDirectory) { $releaseDir = [IO.Path]::GetFullPath($ReleaseDirectory) }
+if ($OutputDirectory) { $distDir = [IO.Path]::GetFullPath($OutputDirectory) }
 $stagingDir = Join-Path $distDir "ApexSenseBridge-Portable"
 $zipPath = Join-Path $distDir "ApexSenseBridge-Portable.zip"
 
@@ -49,7 +53,9 @@ New-Item -ItemType Directory -Path $stagingFull -Force | Out-Null
 
 foreach ($name in @(
     "ApexSenseBridge.exe",
+    "ApexSenseBridgeCapture.exe",
     "ApexSenseBridgeControl.exe",
+    "ApexSenseBridgeIsolationProbe.exe",
     "ApexSenseBridgeTray.exe",
     "ApexSenseBridgeTray.exe.config",
     "libVIIPER.dll",
@@ -58,19 +64,32 @@ foreach ($name in @(
     Copy-RequiredFile (Join-Path $releaseDir $name) (Join-Path $stagingFull $name)
 }
 
+$abiVerifier = Join-Path $releaseDir 'ApexSenseBridgeCaptureAbiTests.exe'
+if (-not (Test-Path -LiteralPath $abiVerifier)) { Fail 'Build the native ABI tests before packaging.' }
+& $abiVerifier (Join-Path $stagingFull 'libVIIPER.dll')
+if ($LASTEXITCODE -ne 0) { Fail 'Apex6 requires a matching raw-capable asb9-or-later DLL; ABI verification failed.' }
+
 Copy-RequiredFile (Join-Path $projectRoot "data\supported_games.json") `
     (Join-Path $stagingFull "Data\supported_games.json")
 Copy-RequiredFile (Join-Path $projectRoot "assets\app.ico") `
     (Join-Path $stagingFull "Resources\app.ico")
 
-foreach ($name in @("VIIPER-LICENSE.txt", "VIIPER-SOURCE.txt",
+foreach ($name in @("VIIPER-LICENSE.txt", "VIIPER-SOURCE.txt", "LIBVIIPER-SOURCE.txt",
                     "VIIPER-v0.7.0-asb.patch")) {
     Copy-RequiredFile (Join-Path $releaseDir $name) (Join-Path $stagingFull "Licenses\$name")
 }
+$libraryRecord = Get-Content -LiteralPath (Join-Path $stagingFull 'Licenses\LIBVIIPER-SOURCE.txt') -Raw
+if ($libraryRecord -notmatch 'Integrated library version: v0\.7\.0-asb([0-9]+)' -or [int]$Matches[1] -lt 9) { Fail 'Apex6 requires libVIIPER asb9 or later.' }
+$actualLibraryHash = (Get-FileHash -LiteralPath (Join-Path $stagingFull 'libVIIPER.dll') -Algorithm SHA256).Hash
+if ($libraryRecord -notmatch 'Artifact SHA-256: ([0-9a-fA-F]{64})' -or $Matches[1] -ne $actualLibraryHash) { Fail 'libVIIPER build record hash does not match the packaged DLL.' }
 Copy-RequiredFile (Join-Path $projectRoot "LICENSE") `
     (Join-Path $stagingFull "Licenses\ApexSenseBridge-LICENSE.txt")
 Copy-RequiredFile (Join-Path $projectRoot "THIRD_PARTY_NOTICES.md") `
     (Join-Path $stagingFull "Licenses\THIRD_PARTY_NOTICES.md")
+Copy-RequiredFile (Join-Path $projectRoot "docs\APEX6_CAPTURE.md") `
+    (Join-Path $stagingFull "APEX6_CAPTURE.md")
+Copy-RequiredFile (Join-Path $projectRoot "docs\APEX6_INTEGRATED_BETA.md") `
+    (Join-Path $stagingFull "APEX6_INTEGRATED_BETA.md")
 Copy-RequiredFile (Join-Path $projectRoot "installer\driver-manifest.json") `
     (Join-Path $stagingFull "Licenses\driver-manifest.json")
 

@@ -1,13 +1,17 @@
 param(
-    [string]$OutputPath = ""
+    [string]$OutputPath = "",
+    [string]$SourceDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$sourceDirectory = Join-Path $projectRoot ".tmp-viiper-build-source"
+if ([string]::IsNullOrWhiteSpace($SourceDirectory)) {
+    $SourceDirectory = Join-Path $projectRoot ".tmp-viiper-build-source-asb6"
+}
+$sourceDirectory = [System.IO.Path]::GetFullPath($SourceDirectory)
 $patchPath = Join-Path $projectRoot "third_party\viiper-patches\viiper-v0.7.0-asb.patch"
 $expectedCommit = "6b71b148a2243fab77ee1a46f4e22e00bd7d5a04"
-$version = "v0.7.0-asb5"
+$version = "v0.7.0-asb6"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $projectRoot "build-win\Release\viiper.exe"
@@ -50,8 +54,8 @@ try {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     $linkerFlags = "-s -w " +
         "-X main.Version=$version " +
-        "-X main.Commit=6b71b14+asb5 " +
-        "-X main.Date=2026-09-06 " +
+        "-X main.Commit=6b71b14+asb6 " +
+        "-X main.Date=2026-09-27 " +
         "-X github.com/Alia5/VIIPER/internal/codegen/common.Version=$version"
     go build -trimpath -buildvcs=false -ldflags $linkerFlags -o $OutputPath ./cmd/viiper
     if ($LASTEXITCODE -ne 0) { throw "VIIPER compilation failed." }
@@ -76,7 +80,8 @@ Copy-Item -LiteralPath $patchPath `
     "Patch: third_party/viiper-patches/viiper-v0.7.0-asb.patch"
     "Patch SHA-256: $patchHash"
     "Virtual DualSense firmware feature report: 0x0630"
-    "Validated in-game: Call of Duty and Marvel's Spider-Man 2"
+    "Capture ABI: unavailable in sidecar; use integrated libVIIPER for raw capture"
+    "Artifact SHA-256: $hash"
 ) | Set-Content -LiteralPath (Join-Path $outputDirectory "VIIPER-SOURCE.txt") `
     -Encoding UTF8
 Write-Host "Built official ApexSenseBridge backend $version with virtual DualSense firmware 0x0630:"

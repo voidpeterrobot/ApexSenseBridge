@@ -1,4 +1,5 @@
 #include "flydigi/Apex5Device.h"
+#include "core/ControllerCapabilities.h"
 
 #include "flydigi/Apex4Protocol.h"
 #include "flydigi/Apex5Protocol.h"
@@ -165,15 +166,20 @@ std::vector<HidDeviceInfo> Apex5Device::findCandidates(std::string& error) {
 
     std::copy_if(all.begin(), all.end(), std::back_inserter(candidates), [](const HidDeviceInfo& info) {
         const bool apex5 = info.vendorId == kVendorId &&
+                           info.productId != 0x2502 &&
                            isControllerProduct(info.productId) &&
                            info.usagePage == kVendorUsagePage;
-        return apex5 || isApex4Candidate(info);
+        return apex5 || isApex4Candidate(info) || asb::isApex6Vendor(info);
     });
 
     return candidates;
 }
 
 std::optional<Apex5Device> Apex5Device::open(const HidDeviceInfo& info, std::string& error) {
+    if (info.vendorId == 0x37d7 && info.productId == 0x2502) {
+        error = "Apex6 Pro supports only the opt-in bridge-triggers grip beta; triggers and profiles are unsupported.";
+        return std::nullopt;
+    }
     TransportPtr transport(platform::createHidTransport(info, error));
     if (!transport || !transport->isOpen()) {
         return std::nullopt;

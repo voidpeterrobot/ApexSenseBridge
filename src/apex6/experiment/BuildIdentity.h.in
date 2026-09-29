@@ -1,0 +1,2 @@
+#pragma once
+#define ASB_APEX6_SOURCE_DIGEST "@ASB_APEX6_SOURCE_DIGEST@"

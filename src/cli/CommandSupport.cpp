@@ -1,5 +1,6 @@
 #include "cli/Commands.h"
 #include "cli/CommandSupport.h"
+#include "core/ControllerCapabilities.h"
 #include "core/TriggerResetGuard.h"
 #include "core/RumbleResetGuard.h"
 #include "diagnostics/HidDiagnostics.h"
@@ -170,6 +171,8 @@ std::string jsonEscape(std::string_view value) {
 }
 
 void printDevice(const asb::HidDeviceInfo& info, std::size_t index) {
+    if (asb::isApex6Vendor(info))
+        std::cout << "Apex6 Pro USB beta: grips only; no adaptive triggers or onboard profiles.\n";
     std::cout << "[" << index << "] "
               << (info.product.empty() ? "Flydigi controller" : narrowAscii(info.product)) << "\n"
               << "    VID:PID      " << hex16(info.vendorId) << ":" << hex16(info.productId) << "\n"

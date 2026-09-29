@@ -96,8 +96,8 @@ Write-Host "Building the statically linked native engine and control panel..."
 & (Join-Path $PSScriptRoot "build-windows.ps1")
 if ($LASTEXITCODE -ne 0) { Fail "native build failed" }
 
-foreach ($name in @("ApexSenseBridge.exe", "ApexSenseBridgeControl.exe", "libVIIPER.dll", "viiper.exe",
-                    "VIIPER-LICENSE.txt", "VIIPER-SOURCE.txt",
+foreach ($name in @("ApexSenseBridge.exe", "ApexSenseBridgeCapture.exe", "ApexSenseBridgeControl.exe", "ApexSenseBridgeIsolationProbe.exe", "libVIIPER.dll", "viiper.exe",
+                    "VIIPER-LICENSE.txt", "VIIPER-SOURCE.txt", "LIBVIIPER-SOURCE.txt",
                     "VIIPER-v0.7.0-asb.patch")) {
     if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $name))) {
         Fail "$name is missing from $releaseDir. Build the pinned patched VIIPER payloads first."
@@ -120,12 +120,21 @@ if ($signingRequested) {
     Write-Host "Signing the Windows release payload..."
     $payloadsToSign = @(
         "ApexSenseBridge.exe",
-        "ApexSenseBridgeControl.exe",
+        "ApexSenseBridgeCapture.exe",
+        "ApexSenseBridgeControl.exe", "ApexSenseBridgeIsolationProbe.exe",
         "ApexSenseBridgeTray.exe",
         "viiper.exe",
         "libVIIPER.dll"
     ) | ForEach-Object { Join-Path $releaseDir $_ }
     & (Join-Path $PSScriptRoot "sign-windows-artifacts.ps1") -Path $payloadsToSign
+    if ($LASTEXITCODE -ne 0) { Fail 'payload signing failed' }
+    # Authenticode changes the artifact bytes; keep the provenance record bound
+    # to the final shipped DLL while retaining its source/toolchain identity.
+    $libraryRecordPath = Join-Path $releaseDir 'LIBVIIPER-SOURCE.txt'
+    $libraryRecord = Get-Content -LiteralPath $libraryRecordPath -Raw
+    $libraryHash = (Get-FileHash -LiteralPath (Join-Path $releaseDir 'libVIIPER.dll') -Algorithm SHA256).Hash
+    $libraryRecord = [regex]::Replace($libraryRecord, '(?m)^Artifact SHA-256: [0-9a-fA-F]{64}', ('Artifact SHA-256: ' + $libraryHash))
+    [IO.File]::WriteAllText($libraryRecordPath, $libraryRecord, (New-Object Text.UTF8Encoding($false)))
     if ($LASTEXITCODE -ne 0) { Fail "release payload signing failed" }
 
     # build-tray-app copies the unsigned executable before this signing stage.

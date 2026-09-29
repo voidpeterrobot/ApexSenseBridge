@@ -1,4 +1,7 @@
 #define AppName "ApexSenseBridge"
+#ifndef PayloadDir
+#define PayloadDir "..\build-win\Release"
+#endif
 #define AppVersion "0.6.3"
 #define AppPublisher "ApexSenseBridge contributors"
 #define AppId "{{5F8B1901-93E1-41E2-96B4-F1B278A5A630}"
@@ -59,18 +62,23 @@ Name: "startwithwindows"; Description: "Démarrer ApexSenseBridge Tray au démar
 Name: "desktopicon"; Description: "Créer un raccourci sur le Bureau pour ApexSenseBridge Tray"; GroupDescription: "Raccourcis :"; Flags: unchecked
 
 [Files]
-Source: "..\build-win\Release\ApexSenseBridge.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build-win\Release\ApexSenseBridgeControl.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build-win\Release\ApexSenseBridgeTray.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build-win\Release\ApexSenseBridgeTray.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridge.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridgeCapture.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\APEX6_CAPTURE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridgeControl.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridgeIsolationProbe.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\APEX6_INTEGRATED_BETA.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridgeTray.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\ApexSenseBridgeTray.exe.config"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\app.ico"; DestDir: "{app}\Resources"; Flags: ignoreversion
 Source: "..\assets\logo.png"; DestDir: "{app}\Resources"; Flags: ignoreversion
 Source: "..\data\supported_games.json"; DestDir: "{app}\Data"; Flags: ignoreversion
-Source: "..\build-win\Release\viiper.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build-win\Release\libVIIPER.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build-win\Release\VIIPER-LICENSE.txt"; DestDir: "{app}\Licenses"; Flags: ignoreversion
-Source: "..\build-win\Release\VIIPER-SOURCE.txt"; DestDir: "{app}\Licenses"; Flags: ignoreversion
-Source: "..\build-win\Release\VIIPER-v0.7.0-asb.patch"; DestDir: "{app}\Licenses"; Flags: ignoreversion
+Source: "{#PayloadDir}\viiper.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\libVIIPER.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\VIIPER-LICENSE.txt"; DestDir: "{app}\Licenses"; Flags: ignoreversion
+Source: "{#PayloadDir}\VIIPER-SOURCE.txt"; DestDir: "{app}\Licenses"; Flags: ignoreversion
+Source: "{#PayloadDir}\LIBVIIPER-SOURCE.txt"; DestDir: "{app}\Licenses"; Flags: ignoreversion
+Source: "{#PayloadDir}\VIIPER-v0.7.0-asb.patch"; DestDir: "{app}\Licenses"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}\Licenses"; DestName: "ApexSenseBridge-LICENSE.txt"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}\Licenses"; Flags: ignoreversion
 Source: "driver-manifest.json"; DestDir: "{app}\Licenses"; Flags: ignoreversion

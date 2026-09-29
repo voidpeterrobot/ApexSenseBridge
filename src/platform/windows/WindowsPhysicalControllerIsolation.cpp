@@ -11,6 +11,7 @@
 #include <cfgmgr32.h>
 #include <initguid.h>
 #include <devpkey.h>
+#include <tlhelp32.h>
 
 #include "platform/PhysicalControllerIsolation.h"
 
@@ -19,6 +20,8 @@
 #include "flydigi/Apex5Protocol.h"
 #include "platform/HidTransport.h"
 #include "platform/SessionControl.h"
+#include "core/ControllerCapabilities.h"
+#include "platform/Apex6IsolationPolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -44,7 +47,7 @@ constexpr wchar_t kRunOnceKey[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
 constexpr wchar_t kRunOnceValue[] =
     L"!ApexSenseBridgeRestoreControllerVisibility";
-constexpr DWORD kRecoveryVersion = 2;
+constexpr DWORD kRecoveryVersion = 4;
 constexpr DWORD kPhasePrepared = 0;
 constexpr DWORD kPhaseConfigurationMayHaveChanged = 1;
 constexpr wchar_t kUninstallKey[] =
@@ -95,6 +98,25 @@ private:
     HANDLE handle_;
 };
 
+// Serialize marker ownership checks with mutation/restoration. A watchdog from
+// an exited session must not restore a new owner's configuration in between.
+class RecoveryLock {
+public:
+    explicit RecoveryLock(std::string& error)
+        : handle_(CreateMutexW(nullptr, FALSE, L"Local\\ApexSenseBridge.IsolationRecovery.v1")) {
+        if (handle_.valid()) {
+            const auto result = WaitForSingleObject(handle_.get(), 5000);
+            acquired_ = result == WAIT_OBJECT_0 || result == WAIT_ABANDONED;
+        }
+        if (!acquired_) error = "Cannot acquire controller isolation recovery ownership.";
+    }
+    ~RecoveryLock() { if (acquired_) ReleaseMutex(handle_.get()); }
+    explicit operator bool() const noexcept { return acquired_; }
+private:
+    ScopedHandle handle_;
+    bool acquired_ = false;
+};
+
 class ScopedDeviceInfoSet {
 public:
     explicit ScopedDeviceInfoSet(HDEVINFO value) noexcept : value_(value) {}
@@ -124,7 +146,10 @@ private:
 };
 
 struct RecoverySnapshot {
+    DWORD strictApex6 = 0;
+    std::vector<std::wstring> ownedDevices, allowedApps;
     DWORD ownerProcessId = 0;
+    std::uint64_t ownerBirth = 0;
     DWORD phase = kPhasePrepared;
     bool originalActive = false;
     bool originalInverse = false;
@@ -399,6 +424,11 @@ bool writeRecoverySnapshot(const RecoverySnapshot& snapshot, std::string& error)
         return false;
     }
     if (!setRegistryDword(key.get(), L"OwnerProcessId", snapshot.ownerProcessId, error) ||
+        !setRegistryDword(key.get(), L"OwnerBirthLow", static_cast<DWORD>(snapshot.ownerBirth), error) ||
+        !setRegistryDword(key.get(), L"OwnerBirthHigh", static_cast<DWORD>(snapshot.ownerBirth >> 32), error) ||
+        !setRegistryDword(key.get(), L"StrictApex6", snapshot.strictApex6, error) ||
+        !setRegistryList(key.get(), L"OwnedDevices", snapshot.ownedDevices, error) ||
+        !setRegistryList(key.get(), L"AllowedApps", snapshot.allowedApps, error) ||
         !setRegistryDword(key.get(), L"Phase", snapshot.phase, error) ||
         !setRegistryDword(key.get(), L"OriginalActive", snapshot.originalActive ? 1 : 0, error) ||
         !setRegistryDword(key.get(), L"OriginalInverse", snapshot.originalInverse ? 1 : 0, error) ||
@@ -439,7 +469,7 @@ bool readRecoverySnapshot(RecoverySnapshot& snapshot, bool& exists,
     DWORD active = 0;
     DWORD inverse = 0;
     if (!getRegistryDword(key.get(), L"Version", version, error) ||
-        (version != 1 && version != kRecoveryVersion) ||
+        (version < 1 || version > kRecoveryVersion) ||
         !getRegistryDword(key.get(), L"OwnerProcessId", snapshot.ownerProcessId, error) ||
         !getRegistryDword(key.get(), L"Phase", snapshot.phase, error) ||
         !getRegistryDword(key.get(), L"OriginalActive", active, error) ||
@@ -449,6 +479,18 @@ bool readRecoverySnapshot(RecoverySnapshot& snapshot, bool& exists,
         if (error.empty()) error = "The controller recovery marker version is unsupported.";
         return false;
     }
+    if (version >= 4) {
+        DWORD low=0,high=0;
+        if(!getRegistryDword(key.get(),L"OwnerBirthLow",low,error)||
+           !getRegistryDword(key.get(),L"OwnerBirthHigh",high,error))return false;
+        snapshot.ownerBirth=(static_cast<std::uint64_t>(high)<<32)|low;
+        if(!snapshot.ownerBirth){error="Invalid controller recovery owner creation time.";return false;}
+    }
+    if (version >= 3 &&
+        (!getRegistryDword(key.get(), L"StrictApex6", snapshot.strictApex6, error) ||
+         snapshot.strictApex6 > 1 ||
+         !getRegistryList(key.get(), L"OwnedDevices", snapshot.ownedDevices, error) ||
+         !getRegistryList(key.get(), L"AllowedApps", snapshot.allowedApps, error))) return false;
     if (version >= 2) {
         DWORD pending = 0;
         if (!getRegistryDword(key.get(), L"ProfileRestorePending", pending, error) ||
@@ -555,12 +597,20 @@ bool setProfileRestorePending(bool pending, std::string& error) {
         key.get(), L"ProfileRestorePending", pending ? 1 : 0, error);
 }
 
-bool processIsRunning(DWORD processId) noexcept {
+std::uint64_t processBirth(HANDLE process) noexcept {
+    FILETIME born{},exit{},kernel{},user{};
+    if(!GetProcessTimes(process,&born,&exit,&kernel,&user))return 0;
+    return (static_cast<std::uint64_t>(born.dwHighDateTime)<<32)|born.dwLowDateTime;
+}
+
+bool processIsRunning(DWORD processId,std::uint64_t expectedBirth=0) noexcept {
     if (processId == 0) return false;
-    ScopedHandle process(OpenProcess(SYNCHRONIZE, FALSE, processId));
+    ScopedHandle process(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId));
     if (!process.valid()) {
         return GetLastError() != ERROR_INVALID_PARAMETER;
     }
+    const auto birth=processBirth(process.get());
+    if(expectedBirth&&birth&&birth!=expectedBirth)return false;
     return WaitForSingleObject(process.get(), 0) == WAIT_TIMEOUT;
 }
 
@@ -750,7 +800,7 @@ std::wstring deviceNodeStringProperty(DEVINST node,
 }
 
 bool flydigiVirtualGamepadPaths(std::vector<std::wstring>& paths,
-                                std::string& error) {
+                                std::string& error, bool strict=false) {
     // Register the verified bus root even before Space Station publishes a
     // child proxy for the launched game. HidHide then covers late-created
     // DualSense/XInput children instead of taking a one-time startup snapshot.
@@ -789,6 +839,25 @@ bool flydigiVirtualGamepadPaths(std::vector<std::wstring>& paths,
         }
     }
 
+    if(strict) {
+        for(DWORD index=0;;++index){
+            SP_DEVINFO_DATA info{};info.cbSize=sizeof(info);
+            if(!SetupDiEnumDeviceInfo(devices.get(),index,&info))break;
+            const auto instance=deviceInstanceId(devices.get(),info);
+            if(!startsWithCaseInsensitive(instance,L"HID\\")&&!startsWithCaseInsensitive(instance,L"USB\\"))continue;
+            DEVINST ancestor=info.DevInst;
+            for(unsigned depth=0;depth<32;++depth){
+                const auto id=deviceNodeInstanceId(ancestor);
+                if(startsWithCaseInsensitive(id,kGenitechVirtualGamepadRoot)){
+                    if(!detail::matchesFlydigiVirtualGamepadRoot(id,deviceNodeStringProperty(ancestor,DEVPKEY_Device_Service))){error="Unexpected Flydigi proxy ancestry.";return false;}
+                    if(!containsCaseInsensitive(paths,instance))paths.push_back(instance);
+                    break;
+                }
+                DEVINST parent=0;if(CM_Get_Parent(&parent,ancestor,0)!=CR_SUCCESS)break;ancestor=parent;
+            }
+        }
+        return true;
+    }
     std::string enumerationError;
     const auto hidDevices = enumerateHidDevices(enumerationError);
     if (!enumerationError.empty()) {
@@ -991,6 +1060,10 @@ bool apexGameDevicePaths(const HidDeviceInfo& apexInterface,
         const bool usbGameInterface = normalized.starts_with(L"USB\\") &&
             (normalized.find(L"&MI_00") != std::wstring::npos ||
              apex4AuxiliaryInput);
+        if(isApex6Vendor(apexInterface)&&usbGameInterface) {
+            const auto service=upper(deviceNodeStringProperty(info.DevInst,DEVPKEY_Device_Service));
+            if(service!=L"XUSB21"&&service!=L"XUSB22"){error="Apex6 XUSB interface service changed.";return false;}
+        }
         if (hidGamepad || usbGameInterface) {
             if (!containsCaseInsensitive(paths, instance)) paths.push_back(instance);
             foundHidGamepad = foundHidGamepad ||
@@ -1093,12 +1166,46 @@ bool restoreApexProfile(const RecoverySnapshot& snapshot,
     return false;
 }
 
-bool recoverPendingImpl(bool& recovered, std::string& error) {
+bool apex6WritersStopped(std::string& error) {
+    ScopedHandle processes(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0));
+    if(!processes.valid()){error="Cannot inspect competing controller writers.";return false;}
+    PROCESSENTRY32W entry{};entry.dwSize=sizeof(entry);
+    if(!Process32FirstW(processes.get(),&entry)){error="Cannot inspect controller writer processes.";return false;}
+    do {
+        const auto name=upper(entry.szExeFile);
+        if(name.find(L"SPACESTATION")!=std::wstring::npos||name.find(L"FLYDIGI")!=std::wstring::npos||
+           name==L"APEXSENSEBRIDGEAPEX6LIVEBRIDGE.EXE"||name==L"APEXSENSEBRIDGEAPEX6NEUTRALEXPERIMENT.EXE") {
+            error="Close Flydigi Space Station, stop SpaceStationService, and close competing controller writers before starting Apex6 beta. No service is restarted automatically.";return false;
+        }
+    }while(Process32NextW(processes.get(),&entry));
+    return true;
+}
+
+bool apex6VisibilityProbe(std::string& error) {
+    const auto executable=moduleFileName(error);if(executable.empty())return false;
+    const auto probe=std::filesystem::path(executable).parent_path()/L"ApexSenseBridgeIsolationProbe.exe";
+    std::wstring command=L"\""+probe.wstring()+L"\"";
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
+    if(!CreateProcessW(probe.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process)){
+        error="Cannot run the packaged Apex6 XInput isolation probe.";return false;
+    }
+    ScopedHandle child(process.hProcess),thread(process.hThread);
+    if(WaitForSingleObject(child.get(),3000)!=WAIT_OBJECT_0){TerminateProcess(child.get(),1);error="XInput isolation probe stalled.";return false;}
+    DWORD code=1;GetExitCodeProcess(child.get(),&code);
+    if(code){error="An XInput controller remains visible. Disconnect unrelated controllers and close other controller emulators before starting Apex6 beta.";return false;}
+    return true;
+}
+
+bool recoverPendingImpl(bool& recovered, std::string& error, DWORD expectedOwner = 0,
+                        std::uint64_t expectedBirth = 0) {
+    RecoveryLock lock(error);
+    if (!lock) return false;
     recovered = false;
     RecoverySnapshot snapshot{};
     bool exists = false;
     if (!readRecoverySnapshot(snapshot, exists, error)) return false;
     if (!exists) return true;
+    if (expectedOwner && !detail::sameRecoveryOwner(snapshot.ownerProcessId,snapshot.ownerBirth,expectedOwner,expectedBirth)) return true;
 
     bool profileRestored = true;
     std::string profileError;
@@ -1114,7 +1221,22 @@ bool recoverPendingImpl(bool& recovered, std::string& error) {
     if (snapshot.phase != kPhasePrepared) {
         ScopedHandle device;
         visibilityRestored = openHidHide(device, visibilityError);
-        if (visibilityRestored) {
+        if (visibilityRestored && snapshot.strictApex6) {
+            std::vector<std::wstring> devices,apps;bool inverse=false;
+            visibilityRestored=getList(device.get(),kIoctlGetBlacklist,devices,"devices",visibilityError)&&
+                getList(device.get(),kIoctlGetWhitelist,apps,"apps",visibilityError)&&
+                getBoolean(device.get(),kIoctlGetInverse,inverse,"inverse",visibilityError);
+            if(visibilityRestored){
+                const auto restored=detail::restoreApex6Isolation({true,inverse,apps,devices},
+                    {snapshot.originalActive,snapshot.originalInverse,snapshot.originalWhitelist,snapshot.originalBlacklist},
+                    {true,false,snapshot.allowedApps,snapshot.ownedDevices});
+                devices=restored.devices;apps=restored.apps;
+                visibilityRestored=setList(device.get(),kIoctlSetBlacklist,devices,"devices",visibilityError)&&
+                    setList(device.get(),kIoctlSetWhitelist,apps,"apps",visibilityError);
+                if(visibilityRestored&&devices.empty()&&!inverse)
+                    visibilityRestored=setBoolean(device.get(),kIoctlSetActive,false,"active",visibilityError);
+            }
+        } else if (visibilityRestored) {
             visibilityRestored =
                 setBoolean(device.get(), kIoctlSetActive, false,
                            "active state", visibilityError) &&
@@ -1170,6 +1292,9 @@ struct TemporaryPhysicalControllerIsolation::Impl {
     bool active = false;
     bool recovered = false;
     bool profileRecoveryArmed = false;
+    bool strict = false;
+    HidDeviceInfo selected;
+    std::vector<std::wstring> expectedApps, expectedDevices;
 };
 
 TemporaryPhysicalControllerIsolation::TemporaryPhysicalControllerIsolation()
@@ -1187,11 +1312,14 @@ bool TemporaryPhysicalControllerIsolation::activate(
     std::string& error) {
     if (impl_->active) return true;
 
+    RecoveryLock lock(error);
+    if (!lock) return false;
+
     RecoverySnapshot stale{};
     bool staleExists = false;
     if (!readRecoverySnapshot(stale, staleExists, error)) return false;
     if (staleExists) {
-        if (processIsRunning(stale.ownerProcessId)) {
+        if (processIsRunning(stale.ownerProcessId,stale.ownerBirth)) {
             error = "Another ApexSenseBridge process owns the active controller isolation.";
             return false;
         }
@@ -1204,6 +1332,10 @@ bool TemporaryPhysicalControllerIsolation::activate(
     if (!openHidHide(device, error)) return false;
     RecoverySnapshot snapshot{};
     snapshot.ownerProcessId = GetCurrentProcessId();
+    snapshot.ownerBirth=processBirth(GetCurrentProcess());
+    if(!snapshot.ownerBirth){error="Cannot identify controller isolation owner creation time.";return false;}
+    snapshot.strictApex6 = isApex6Vendor(apexInterface) ? 1 : 0;
+    if(snapshot.strictApex6 && originalApexProfile){error="Apex6 profiles are unsupported.";return false;}
     if (originalApexProfile) {
         if (*originalApexProfile >= flydigi::kProfileSlotCount ||
             apexInterface.path.empty()) {
@@ -1233,17 +1365,25 @@ bool TemporaryPhysicalControllerIsolation::activate(
                 "ApexSenseBridge will not overwrite it.";
         return false;
     }
+    if(snapshot.strictApex6 && !snapshot.originalBlacklist.empty()) {
+        error="Apex6 beta requires HidHide with no existing hidden-device configuration.";return false;
+    }
 
     std::vector<std::wstring> apexPaths;
     if (!apexGameDevicePaths(apexInterface, apexPaths, error)) return false;
+    if(snapshot.strictApex6) {
+        if(!apex6WritersStopped(error))return false;
+        apexPaths.push_back(apexInterface.instanceId);
+    }
     std::vector<std::wstring> flydigiProxyPaths;
-    if (!flydigiVirtualGamepadPaths(flydigiProxyPaths, error)) return false;
+    if (!flydigiVirtualGamepadPaths(flydigiProxyPaths, error,snapshot.strictApex6!=0)) return false;
     const auto executable = moduleFileName(error);
     if (executable.empty()) return false;
     const auto ntExecutable = imageNtPath(executable, error);
     if (ntExecutable.empty()) return false;
 
     auto temporaryWhitelist = snapshot.originalWhitelist;
+    if(snapshot.strictApex6)temporaryWhitelist.clear();
     if (!containsCaseInsensitive(temporaryWhitelist, ntExecutable)) {
         temporaryWhitelist.push_back(ntExecutable);
     }
@@ -1252,7 +1392,7 @@ bool TemporaryPhysicalControllerIsolation::activate(
     // access to the selected physical APEX while HidHide keeps that controller
     // unavailable to the game. The virtual shortcut devices are distinct and
     // remain visible, so this does not reintroduce physical gamepad input.
-    for (const auto& service : flydigiSpaceStationServiceNtPaths()) {
+    for (const auto& service : snapshot.strictApex6 ? std::vector<std::wstring>{} : flydigiSpaceStationServiceNtPaths()) {
         if (!containsCaseInsensitive(temporaryWhitelist, service)) {
             temporaryWhitelist.push_back(service);
         }
@@ -1272,6 +1412,7 @@ bool TemporaryPhysicalControllerIsolation::activate(
         }
     }
 
+    snapshot.ownedDevices=temporaryBlacklist;snapshot.allowedApps=temporaryWhitelist;
     if (!writeRecoverySnapshot(snapshot, error)) return false;
     if (!registerRunOnce(executable, error) ||
         !startWatchdog(executable, snapshot.ownerProcessId, sessionToken, error) ||
@@ -1317,13 +1458,17 @@ bool TemporaryPhysicalControllerIsolation::activate(
                 return containsCaseInsensitive(effectiveBlacklist, path);
             });
         configured = effectiveActive && !effectiveInverse &&
-                     whitelistComplete && blacklistComplete;
+                     whitelistComplete && blacklistComplete &&
+                     (!snapshot.strictApex6 || (effectiveWhitelist.size()==temporaryWhitelist.size() && effectiveBlacklist.size()==temporaryBlacklist.size()));
         if (!configured) {
             error = "HidHide did not retain the complete temporary controller "
                     "isolation configuration; refusing to report the bridge Ready.";
         }
     }
 
+    // HidHide's control endpoint allows only one open, regardless of share flags.
+    // Release activation's handle before rollback or the independent health check.
+    device.reset();
     if (!configured) {
         const auto activationError = error;
         bool recovered = false;
@@ -1337,7 +1482,14 @@ bool TemporaryPhysicalControllerIsolation::activate(
     }
 
     impl_->active = true;
+    impl_->strict = snapshot.strictApex6 != 0;
+    impl_->selected = apexInterface;
+    impl_->expectedApps = temporaryWhitelist;
+    impl_->expectedDevices = temporaryBlacklist;
     impl_->profileRecoveryArmed = originalApexProfile.has_value();
+    if(impl_->strict && !healthy(error)) {
+        const auto failure=error;std::string ignored;restore(ignored);error=failure;return false;
+    }
     return true;
 }
 
@@ -1355,16 +1507,50 @@ bool TemporaryPhysicalControllerIsolation::confirmApexProfileRestored(
 }
 
 bool TemporaryPhysicalControllerIsolation::restore(std::string& error) noexcept {
+    try {
+    RecoveryLock lock(error);
+    if (!lock) return false;
     if (!impl_ || (!impl_->active && !recoveryMarkerExists())) return true;
+    if(!impl_->active){
+        RecoverySnapshot snapshot;bool exists=false;
+        if(!readRecoverySnapshot(snapshot,exists,error))return false;
+        if(exists&&snapshot.ownerProcessId!=GetCurrentProcessId())return true;
+    }
     bool recovered = false;
-    if (!recoverPending(recovered, error)) return false;
+    if (!recoverPendingImpl(recovered, error, GetCurrentProcessId(),processBirth(GetCurrentProcess()))) return false;
     impl_->active = false;
     impl_->profileRecoveryArmed = false;
     return true;
+    } catch (...) {
+        error = "Unexpected failure while restoring owned controller isolation.";
+        return false;
+    }
 }
 
 bool TemporaryPhysicalControllerIsolation::active() const noexcept {
     return impl_ && impl_->active;
+}
+
+bool TemporaryPhysicalControllerIsolation::healthy(std::string& error) const {
+    RecoveryLock lock(error);
+    if(!lock)return false;
+    if(!impl_->active){error="Controller isolation is inactive.";return false;}
+    if(!impl_->strict)return true;
+    if(!apex6WritersStopped(error))return false;
+    ScopedHandle device;if(!openHidHide(device,error))return false;
+    bool active=false,inverse=false;std::vector<std::wstring> apps,devices,targets,proxies;
+    if(!getBoolean(device.get(),kIoctlGetActive,active,"active",error)||
+       !getBoolean(device.get(),kIoctlGetInverse,inverse,"inverse",error)||
+       !getList(device.get(),kIoctlGetWhitelist,apps,"apps",error)||
+       !getList(device.get(),kIoctlGetBlacklist,devices,"devices",error)||
+       !apexGameDevicePaths(impl_->selected,targets,error)||
+       !flydigiVirtualGamepadPaths(proxies,error,true))return false;
+    targets.push_back(impl_->selected.instanceId);
+    for(const auto& p:proxies)if(!containsCaseInsensitive(targets,p))targets.push_back(p);
+    if(!detail::matchesApex6Isolation({active,inverse,apps,devices},{true,false,impl_->expectedApps,impl_->expectedDevices})||!detail::sameIsolationList(targets,impl_->expectedDevices)){
+        error="Apex6 isolation changed (allowlist, physical interfaces, or Flydigi proxies). Recovery required.";return false;
+    }
+    return apex6VisibilityProbe(error);
 }
 
 bool TemporaryPhysicalControllerIsolation::recoveredStaleIsolation() const noexcept {
@@ -1386,6 +1572,7 @@ int TemporaryPhysicalControllerIsolation::watchAndRecover(
     std::uint32_t ownerProcessId,
     std::string_view sessionToken,
     std::string& error) noexcept {
+    try {
     ScopedHandle playniteStopEvent;
     if (!sessionToken.empty()) {
         if (!isValidSessionToken(sessionToken)) {
@@ -1405,29 +1592,46 @@ int TemporaryPhysicalControllerIsolation::watchAndRecover(
         }
     }
 
-    ScopedHandle owner(OpenProcess(SYNCHRONIZE, FALSE, ownerProcessId));
+    RecoverySnapshot original;bool originalExists=false;
+    if(!readRecoverySnapshot(original,originalExists,error))return 2;
+    if(!originalExists||original.ownerProcessId!=ownerProcessId)return 0;
+    ScopedHandle owner(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ownerProcessId));
     if (!owner.valid()) {
         const auto code = GetLastError();
         if (code != ERROR_INVALID_PARAMETER) {
             error = windowsError("Opening the bridge process from the recovery watchdog", code);
             return 1;
         }
-    } else if (WaitForSingleObject(owner.get(), INFINITE) != WAIT_OBJECT_0) {
-        error = windowsError("Waiting for the bridge process", GetLastError());
-        return 1;
+    } else {
+        const auto birth=processBirth(owner.get());
+        if(original.ownerBirth&&!birth){error="Cannot verify recovery watchdog owner creation time.";return 1;}
+        if((!original.ownerBirth||birth==original.ownerBirth) &&
+           WaitForSingleObject(owner.get(), INFINITE) != WAIT_OBJECT_0) {
+            error = windowsError("Waiting for the bridge process", GetLastError());
+            return 1;
+        }
     }
 
     // An unexpected engine exit must remain fail-closed while its Playnite
     // game session is active. Normal shutdown has already signalled this event,
     // so it passes through without adding latency.
-    if (playniteStopEvent.valid() &&
+    RecoverySnapshot snapshot;bool exists=false;
+    if(!readRecoverySnapshot(snapshot,exists,error))return 2;
+    if(!exists||snapshot.ownerProcessId!=ownerProcessId)return 0;
+    if (!snapshot.strictApex6 && playniteStopEvent.valid() &&
         WaitForSingleObject(playniteStopEvent.get(), INFINITE) != WAIT_OBJECT_0) {
         error = windowsError("Waiting for the Playnite game to stop", GetLastError());
         return 1;
     }
 
     bool recovered = false;
-    return recoverPending(recovered, error) ? 0 : 2;
+    if(!readRecoverySnapshot(snapshot,exists,error))return 2;
+    if(!exists||snapshot.ownerProcessId!=ownerProcessId)return 0;
+    return recoverPendingImpl(recovered, error, ownerProcessId,original.ownerBirth) ? 0 : 2;
+    } catch (...) {
+        error = "Unexpected failure in the controller isolation watchdog.";
+        return 2;
+    }
 }
 
 namespace detail {

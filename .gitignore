@@ -46,6 +46,15 @@ Apex4-Full-Session-Tester/
 *.trace
 captures/
 logs/
+# Private controller/session evidence, including files created outside output dirs
+*.pcap
+*.pcapng
+*.etl
+*.asb
+apex6-settings-v*.txt
+apex6-last-session.json
+operator-report.json
+operator-observations.md
 
 # Temporary downloads, extracted upstream sources and local packages
 .tmp-*/

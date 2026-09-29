@@ -1,0 +1,99 @@
+{
+  "schema": "asb.apex6.planned-left-pulse.v1",
+  "status": "offline_candidate_not_an_approval",
+  "scope": "grip-left-pulse-v4",
+  "sample_rate_hz": 1000,
+  "tone_hz": 125,
+  "base_peak": 0.0625,
+  "gain": 12,
+  "peak_limit": 0.75,
+  "software_peak": 0.75,
+  "edge_peak": 0.375,
+  "strength_policy": "fixed_gain_then_symmetric_clip",
+  "tone_ms": 64,
+  "nominal_stream_ms": 88,
+  "waveform_write_count": 11,
+  "selector": 0,
+  "left_enabled": true,
+  "right_enabled_but_neutral": true,
+  "trigger_enabled": false,
+  "packets": [
+    {
+      "index": 0,
+      "nominal_due_us": 0,
+      "kind": "neutral",
+      "usb_body_hex": "5aa5571b9880808080808080808080808080808080808080808080808000000a",
+      "windows_report_hex": "005aa5571b9880808080808080808080808080808080808080808080808000000a"
+    },
+    {
+      "index": 1,
+      "nominal_due_us": 8000,
+      "kind": "half_amplitude",
+      "usb_body_hex": "5aa5571b9880808080a18080af8080a180808080805e80805080805e80000007",
+      "windows_report_hex": "005aa5571b9880808080a18080af8080a180808080805e80805080805e80000007"
+    },
+    {
+      "index": 2,
+      "nominal_due_us": 16000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 3,
+      "nominal_due_us": 24000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 4,
+      "nominal_due_us": 32000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 5,
+      "nominal_due_us": 40000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 6,
+      "nominal_due_us": 48000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 7,
+      "nominal_due_us": 56000,
+      "kind": "full_amplitude",
+      "usb_body_hex": "5aa5571b9880808080c38080df8080c380808080803c80802080803c80000007",
+      "windows_report_hex": "005aa5571b9880808080c38080df8080c380808080803c80802080803c80000007"
+    },
+    {
+      "index": 8,
+      "nominal_due_us": 64000,
+      "kind": "half_amplitude",
+      "usb_body_hex": "5aa5571b9880808080a18080af8080a180808080805e80805080805e80000007",
+      "windows_report_hex": "005aa5571b9880808080a18080af8080a180808080805e80805080805e80000007"
+    },
+    {
+      "index": 9,
+      "nominal_due_us": 72000,
+      "kind": "neutral",
+      "usb_body_hex": "5aa5571b9880808080808080808080808080808080808080808080808000000a",
+      "windows_report_hex": "005aa5571b9880808080808080808080808080808080808080808080808000000a"
+    },
+    {
+      "index": 10,
+      "nominal_due_us": 80000,
+      "kind": "neutral",
+      "usb_body_hex": "5aa5571b9880808080808080808080808080808080808080808080808000000a",
+      "windows_report_hex": "005aa5571b9880808080808080808080808080808080808080808080808000000a"
+    }
+  ]
+}

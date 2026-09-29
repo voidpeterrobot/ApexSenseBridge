@@ -30,7 +30,10 @@ if ([string]::IsNullOrWhiteSpace($PlayniteInstallDir)) {
         "G:\Program Files\Playnite"
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     $PlayniteInstallDir = $installCandidates |
-        Where-Object { Test-Path -LiteralPath (Join-Path $_ "Playnite.SDK.dll") } |
+        Where-Object {
+            (Test-Path -LiteralPath $_ -PathType Container) -and
+            (Test-Path -LiteralPath (Join-Path $_ "Playnite.SDK.dll"))
+        } |
         Select-Object -First 1
 }
 

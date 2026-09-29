@@ -4,6 +4,11 @@ namespace ApexSenseBridgeTray.Services
 {
     public static class GameActivationPolicy
     {
+        public static bool IsPassiveManualMode(string forcedProfile, bool activeApex6)
+        {
+            return !activeApex6 && !string.IsNullOrWhiteSpace(forcedProfile) &&
+                !string.Equals(forcedProfile, "none", System.StringComparison.OrdinalIgnoreCase);
+        }
         public static bool ShouldActivate(
             SupportedGame game,
             TraySettings settings,

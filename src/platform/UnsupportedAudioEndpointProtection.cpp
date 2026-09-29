@@ -30,5 +30,6 @@ AudioDefaultProtectionStatus VirtualDualSenseAudioEndpointProtection::status() c
 std::size_t VirtualDualSenseAudioEndpointProtection::restoredRoles() const noexcept {
     return 0;
 }
+std::array<std::wstring,3> VirtualDualSenseAudioEndpointProtection::defaultEndpointIds() const { return {}; }
 
 } // namespace asb::platform

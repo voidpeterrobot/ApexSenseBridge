@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ExpectedVersion = "",
+    [string]$ReleaseDirectory = "build-win\Release",
+    [string]$OutputDirectory = "dist",
     [switch]$CheckArtifacts,
     [switch]$RequireSignatures
 )
@@ -8,6 +10,16 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+
+function Resolve-ArtifactPath([string]$Path) {
+    if ($Path.StartsWith('build-win\Release\')) {
+        $Path = Join-Path $ReleaseDirectory $Path.Substring(18)
+    } elseif ($Path.StartsWith('dist\')) {
+        $Path = Join-Path $OutputDirectory $Path.Substring(5)
+    }
+    if ([IO.Path]::IsPathRooted($Path)) { return $Path }
+    return Join-Path $projectRoot $Path
+}
 
 function Fail([string]$Message) {
     throw "ApexSenseBridge release contract: $Message"
@@ -53,7 +65,7 @@ function Get-CoreVersion([string]$Value) {
 }
 
 function Assert-ArtifactVersion([string]$RelativePath) {
-    $path = Join-Path $projectRoot $RelativePath
+    $path = Resolve-ArtifactPath $RelativePath
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Fail "release artifact is missing: $RelativePath"
     }
@@ -102,7 +114,9 @@ Assert-Version "scripts\update-app.ps1" `
 if ($CheckArtifacts) {
     foreach ($artifact in @(
         "build-win\Release\ApexSenseBridge.exe",
+        "build-win\Release\ApexSenseBridgeCapture.exe",
         "build-win\Release\ApexSenseBridgeControl.exe",
+        "build-win\Release\ApexSenseBridgeIsolationProbe.exe",
         "build-win\Release\ApexSenseBridgeTray.exe",
         "playnite\ApexSenseBridge\bin\Release\ApexSenseBridge.dll",
         "dist\ApexSenseBridge-Setup.exe",
@@ -112,13 +126,13 @@ if ($CheckArtifacts) {
     }
 
     $expectedPext = "ApexSenseBridge-Playnite-$($script:Version).pext"
-    $pextFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot "dist") `
+    $pextFiles = @(Get-ChildItem -LiteralPath (Resolve-ArtifactPath "dist\.") `
         -Filter "ApexSenseBridge-Playnite-*.pext" -File)
     if ($pextFiles.Count -ne 1 -or $pextFiles[0].Name -ne $expectedPext) {
         Fail "dist must contain exactly $expectedPext and no stale Playnite package"
     }
 
-    $checksumPath = Join-Path $projectRoot "dist\SHA256SUMS.txt"
+    $checksumPath = Resolve-ArtifactPath "dist\SHA256SUMS.txt"
     if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
         Fail "dist\SHA256SUMS.txt is missing"
     }
@@ -133,7 +147,7 @@ if ($CheckArtifacts) {
         }
         $expectedHash = $Matches[1].ToUpperInvariant()
         $artifactName = $Matches[2]
-        $artifactPath = Join-Path (Join-Path $projectRoot "dist") $artifactName
+        $artifactPath = Resolve-ArtifactPath ("dist\" + $artifactName)
         if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
             Fail "checksum references missing artifact: $artifactName"
         }
@@ -150,7 +164,9 @@ if ($RequireSignatures) {
     }
     $signedPaths = @(
         "build-win\Release\ApexSenseBridge.exe",
+        "build-win\Release\ApexSenseBridgeCapture.exe",
         "build-win\Release\ApexSenseBridgeControl.exe",
+        "build-win\Release\ApexSenseBridgeIsolationProbe.exe",
         "build-win\Release\ApexSenseBridgeTray.exe",
         "build-win\Release\viiper.exe",
         "build-win\Release\libVIIPER.dll",
@@ -160,7 +176,7 @@ if ($RequireSignatures) {
     )
     $publisher = $null
     foreach ($relativePath in $signedPaths) {
-        $path = Join-Path $projectRoot $relativePath
+        $path = Resolve-ArtifactPath $relativePath
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             Fail "signed payload is missing: $relativePath"
         }

@@ -42,6 +42,10 @@ public:
     [[nodiscard]] virtual PhysicalInputSourceStats stats() const noexcept = 0;
 };
 
+// Descriptor-driven gamepad reader only; never opens a vendor output session.
+std::unique_ptr<PhysicalInputSource> openGenericHidInputSource(
+    const HidDeviceInfo& selectedGamepad, std::string& error);
+
 // Uses the game-controller HID collection belonging to the same Windows
 // container as apexVendorInterface. --xinput-index remains an advanced escape
 // hatch and explicitly selects the polling fallback.

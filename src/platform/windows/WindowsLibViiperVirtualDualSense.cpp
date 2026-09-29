@@ -2,6 +2,8 @@
 #include <windows.h>
 
 #include "platform/windows/WindowsVirtualDualSenseBackends.h"
+#include "capture/RawFeedbackSink.h"
+#include "capture/RawCapture.h"
 
 #include <algorithm>
 #include <array>
@@ -90,6 +92,12 @@ bool resolve(HMODULE library, const char* name, Function& function, std::string&
 }
 
 class LibViiperVirtualDualSense final : public VirtualDualSense {
+    struct CaptureContext {
+        std::mutex mutex;
+        capture::RawFeedbackSink* sink=nullptr;
+        std::atomic_bool connected{false};
+        bool closing=false;
+    };
 public:
     explicit LibViiperVirtualDualSense(VirtualDualSenseOptions options)
         : options_(std::move(options)) {}
@@ -159,7 +167,7 @@ public:
         if (!createDualSenseDevice_(serverHandle_,
                                     &deviceHandle_,
                                     busId_,
-                                    1,
+                                    options_.rawFeedbackSink ? 0 : 1,
                                     0,
                                     0,
                                     nullptr) ||
@@ -173,6 +181,14 @@ public:
 
         const auto feedbackStartedAt = std::chrono::steady_clock::now();
         callbacksEnabled_.store(true, std::memory_order_release);
+        if(options_.rawFeedbackSink){captureContext_=std::make_unique<CaptureContext>();captureContext_->sink=options_.rawFeedbackSink;}
+        if (options_.rawFeedbackSink &&
+            !setCaptureCallback_(deviceHandle_, &LibViiperVirtualDualSense::captureThunk,
+                                 reinterpret_cast<std::uintptr_t>(captureContext_.get()))) {
+            error = "Could not register raw DualSense feedback.";
+            close();
+            return false;
+        }
         if (!setRawOutputCallback_(deviceHandle_,
                                    &LibViiperVirtualDualSense::rawOutputThunk,
                                    reinterpret_cast<std::uintptr_t>(this))) {
@@ -191,6 +207,22 @@ public:
             return false;
         }
         initializationInputUs_ = elapsedMicroseconds(inputStartedAt);
+        if (options_.rawFeedbackSink) {
+            if (!attachDevice_(deviceHandle_)) {
+                error = "Could not attach raw-capable DualSense.";
+                close();
+                return false;
+            }
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!captureContext_->connected && !options_.rawFeedbackSink->failed() &&
+                   std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (!captureContext_->connected || options_.rawFeedbackSink->failed()) {
+                error = "Raw DualSense host connection failed.";
+                close();
+                return false;
+            }
+        }
 
         audioWorkerRunning_ = true;
         try {
@@ -201,7 +233,7 @@ public:
             return false;
         }
 
-        backendVersion_ = "libVIIPER v0.7.0-asb7 (integrated)";
+        backendVersion_ = "libVIIPER v0.7.0 ASB (integrated; legacy summary API)";
         connected_.store(true, std::memory_order_release);
         error.clear();
         return true;
@@ -210,6 +242,18 @@ public:
     void close() noexcept override {
         connected_.store(false, std::memory_order_release);
         callbacksEnabled_.store(false, std::memory_order_release);
+        if(captureContext_){std::lock_guard lock(captureContext_->mutex);captureContext_->closing=true;}
+        if (deviceHandle_ != 0 && setCaptureCallback_) {
+            if (!setCaptureCallback_(deviceHandle_, nullptr, 0) && captureContext_) {
+                // Failed unregistration cannot prove callback quiescence. Leave a
+                // tombstone for the DLL, with no pointer into the session owner.
+                {std::lock_guard lock(captureContext_->mutex);
+                    if(captureContext_->sink)captureContext_->sink->fail("raw callback unregistration failed");
+                    captureContext_->sink=nullptr;}
+                (void)captureContext_.release();
+            }
+        }
+        captureContext_.reset();
 
         if (deviceHandle_ != 0 && setRawOutputCallback_) {
             (void)setRawOutputCallback_(deviceHandle_, nullptr, 0);
@@ -302,6 +346,19 @@ public:
     }
 
 private:
+    static void __cdecl captureThunk(std::uintptr_t context, const std::uint8_t* data,
+                                    std::uint32_t size) noexcept {
+        if (!context) return;
+        auto& self = *reinterpret_cast<CaptureContext*>(context);
+        std::lock_guard lock(self.mutex);
+        if(!self.sink)return;
+        // The DLL serializes callbacks and unregistration. Do not retain its memory.
+        if (!data) { self.sink->fail("null raw feedback"); return; }
+        if (size >= capture::headerSize + 8 && size <= capture::maxRecordSize &&
+            data[6] == 3 && data[7] == 0 && data[capture::headerSize] == 1)
+            self.connected = true;
+        self.sink->submit({data, size}, self.closing);
+    }
     static void __cdecl rawOutputThunk(std::uintptr_t context,
                                        const std::uint8_t* frame,
                                        std::uint32_t frameLength) noexcept {
@@ -432,6 +489,17 @@ private:
     }
 
     bool resolveFunctions(std::string& error) {
+        if (options_.rawFeedbackSink) {
+            using Capabilities = std::uint32_t(__cdecl*)(std::uint32_t);
+            Capabilities capabilities = nullptr;
+            if (!resolve(library_, "GetASBCaptureCapabilities", capabilities, error) ||
+                !resolve(library_, "SetDualSenseASBCaptureCallback", setCaptureCallback_, error) ||
+                !resolve(library_, "AttachDualSenseASBDevice", attachDevice_, error)) return false;
+            if ((capabilities(1) & 7) != 7) {
+                error = "Apex6 requires raw audio/HID/events ABI 1 (asb9 or later).";
+                return false;
+            }
+        }
         return resolve(library_, "NewUSBServerASBLoopback",
                        newUSBServerASBLoopback_, error) &&
                resolve(library_, "CloseUSBServer", closeUSBServer_, error) &&
@@ -453,6 +521,8 @@ private:
         setInputState_ = nullptr;
         setRawOutputCallback_ = nullptr;
         removeDualSenseDevice_ = nullptr;
+        setCaptureCallback_ = nullptr;
+        attachDevice_ = nullptr;
     }
 
     void resetStats() noexcept {
@@ -489,6 +559,9 @@ private:
     SetDualSenseASBInputStateFn setInputState_ = nullptr;
     SetDualSenseASBRawOutputCallbackFn setRawOutputCallback_ = nullptr;
     RemoveDualSenseDeviceFn removeDualSenseDevice_ = nullptr;
+    SetDualSenseASBRawOutputCallbackFn setCaptureCallback_ = nullptr;
+    RemoveDualSenseDeviceFn attachDevice_ = nullptr;
+    std::unique_ptr<CaptureContext> captureContext_;
 
     FeedbackHandler handler_;
     std::string backendVersion_;
