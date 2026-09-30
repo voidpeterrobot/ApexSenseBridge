@@ -107,17 +107,19 @@ namespace ApexSenseBridge.Shared
         public static string SelectionArgument { get { return ControllerIndex.HasValue ? " " + ControllerIndex.Value.ToString(CultureInfo.InvariantCulture) : ""; } }
 
         // Embedded by both hosts. No separate modal window and no timer while unloaded/hidden.
-        public static FrameworkElement CreateControls(Action<double> liveGain, Func<string> readStatus = null)
+        public static FrameworkElement CreateControls(Action<double> liveGain, Func<string> readStatus = null, bool supportsDongle = false)
         {
-            return CreateControls(liveGain, readStatus, Read, Update);
+            return CreateControls(liveGain, readStatus, Read, Update, supportsDongle);
         }
 
         internal static FrameworkElement CreateControls(Action<double> liveGain, Func<string> readStatus,
-            Func<Apex6Preferences> readPreferences, Action<bool?, double?> updatePreferences)
+            Func<Apex6Preferences> readPreferences, Action<bool?, double?> updatePreferences, bool supportsDongle = false)
         {
             var panel = new StackPanel();
-            panel.Children.Add(new TextBlock { Text = "Apex6 Pro · USB grip beta", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
-            panel.Children.Add(new TextBlock { Text = "Grip feedback over direct USB. Adaptive triggers, wireless and onboard profiles are unavailable. Close Flydigi Space Station and stop its service before starting.", TextWrapping = TextWrapping.Wrap, Opacity = .8 });
+            panel.Children.Add(new TextBlock { Text = supportsDongle ? "Apex6 Pro · Grip beta" : "Apex6 Pro · USB grip beta", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
+            panel.Children.Add(new TextBlock { Text = supportsDongle
+                ? "USB grip feedback with optional experimental 2.4 GHz support below. Adaptive triggers and onboard profiles are unavailable. Close Flydigi Space Station and stop its service before starting."
+                : "Grip feedback over direct USB. Adaptive triggers, wireless and onboard profiles are unavailable. Close Flydigi Space Station and stop its service before starting.", TextWrapping = TextWrapping.Wrap, Opacity = .8 });
             var consent = new CheckBox { Content = "Enable Apex6 Pro grip beta", Margin = new Thickness(0, 12, 0, 12) };
             consent.SetBinding(Control.ForegroundProperty, new Binding { Source = panel, Path = new PropertyPath(TextBlock.ForegroundProperty) });
             panel.Children.Add(consent);

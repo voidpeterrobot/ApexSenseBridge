@@ -5,6 +5,7 @@ build-linux/
 build-*/
 cmake-build-*/
 dist/
+dist_private/
 bin/
 obj/
 out/

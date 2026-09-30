@@ -71,6 +71,7 @@ void printUsage() {
         << "                  [--isolate-apex]\n"
         << "                  [--session-token 32HEX]\n"
         << "                  [--controller-model apex6-pro] [--apex6-beta-consent] [--grip-gain 0..12]\n"
+        << "                  [--apex6-dongle-beta] (experimental: 10 min active / 20 min total)\n"
         << "                               Route adaptive triggers and optional grip/audio haptics\n"
         << "  test-rt [index]              Gentle RT FORCEADAPT test (~1.5 s)\n"
         << "  test-rumble [index]          Gentle grip-motor vibration test (~1 s)\n"
@@ -98,6 +99,14 @@ int run(int argc, char** argv) {
     }
 
     const std::string_view command = argv[1];
+#ifdef ASB_APEX6_DONGLE_LIVE_DIAGNOSTIC
+    if(command=="help"||command=="--help"||command=="-h"){
+        std::cout<<"Experimental dongle game session: bridge-triggers --dongle-confirmed --supervised --telemetry-json PRIVATE_PATH [--grip-gain 0..12]\n10 minutes active / 20 minutes total maximum. Start before the game. Q stops orderly.\n";return 0;
+    }
+    if(command!="bridge-triggers"&&command!="hidhide-watchdog"&&command!="restore-controller-visibility"&&command!="stop-active-sessions"){
+        std::cerr<<"Command unavailable in the dongle live diagnostic.\n";return 1;
+    }
+#endif
     if (command == "help" || command == "--help" || command == "-h") {
         printUsage();
         return 0;

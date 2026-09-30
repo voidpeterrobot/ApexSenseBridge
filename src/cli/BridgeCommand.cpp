@@ -203,13 +203,23 @@ private:
 
 bool parseBridgeOptions(int argc, char** argv, BridgeCommandOptions& options,
                         std::string& error) {
+#ifdef ASB_APEX6_DONGLE_LIVE_DIAGNOSTIC
+    bool dongleConfirmed=false,supervised=false;
+    options.apex6DongleDiagnostic=true;options.requireApex6=true;
+#endif
     for (int i = 2; i < argc; ++i) {
         const std::string_view value = argv[i];
+#ifdef ASB_APEX6_DONGLE_LIVE_DIAGNOSTIC
+        if(value=="--dongle-confirmed"){dongleConfirmed=true;continue;}
+        if(value=="--supervised"){supervised=true;continue;}
+#endif
         if (value == "--controller-model") {
             if(++i>=argc||std::string_view(argv[i])!="apex6-pro"){error="--controller-model currently accepts apex6-pro.";return false;}
             options.requireApex6=true;
         } else if (value == "--apex6-beta-consent") {
             options.apex6Consent=true;
+        } else if (value == "--apex6-dongle-beta") {
+            options.apex6DongleBeta=true;options.requireApex6=true;
         } else if (value == "--grip-gain") {
             if(++i>=argc){error="--grip-gain requires a finite number from 0 to 12.";return false;}
             try {std::size_t used=0;double gain=std::stod(argv[i],&used);
@@ -329,6 +339,11 @@ bool parseBridgeOptions(int argc, char** argv, BridgeCommandOptions& options,
             return false;
         }
     }
+#ifdef ASB_APEX6_DONGLE_LIVE_DIAGNOSTIC
+    if(!dongleConfirmed||!supervised){error="Dongle live diagnostic requires --dongle-confirmed --supervised; start before the game.";return false;}
+    if(options.telemetryJson.empty()){error="Dongle live diagnostic requires --telemetry-json for a private result file.";return false;}
+    if(!options.duration||*options.duration>std::chrono::seconds(1200))options.duration=std::chrono::seconds(1200);
+#endif
     if (options.hapticThresholdExplicit && !options.routeRumble) {
         error = "--haptic-threshold requires --rumble.";
         return false;

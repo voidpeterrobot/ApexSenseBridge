@@ -23,6 +23,8 @@ struct BridgeCommandOptions {
     std::filesystem::path telemetryJson;
     bool apex6Consent=false;
     bool requireApex6=false;
+    bool apex6DongleDiagnostic=false;
+    bool apex6DongleBeta=false;
     std::optional<double> gripGain;
 };
 #ifdef _WIN32

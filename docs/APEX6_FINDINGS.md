@@ -66,6 +66,22 @@ outside the public source tree.
 
 ## Public repository boundary
 
+The later [2.4 GHz dongle investigation](APEX6_DONGLE_INVESTIGATION.md) records
+matching framing/baselines, a validated UID query between baseline boundaries,
+and a neutral experiment that stopped on a missing combined-exit reply. A passive
+official dongle capture also contains fewer mode replies than requests; reply
+attribution and the cause remain unresolved. A revised neutral diagnostic with
+validated UID queries between shutdown modes completed with matching postflight;
+its individual restore replies remained unverified. A fixed low-strength left
+pulse and subsequent right/both pulses completed with matching postflight and
+operator-confirmed correct-side output, complete stop and normal operation
+without restart. The operator then reported successful Endfield gameplay, but
+closed the console rather than using Q; no final report was produced, and normal
+vibration required a controller restart. Tray/CLI now expose a separately selected,
+bounded dongle beta. Game-session orderly shutdown remains unverified. Full wireless support
+remains unqualified. Descriptor matching alone cannot enforce the
+previously tested direct-USB scope.
+
 Keep model VID/PID values, interface-role rules, standard API GUIDs and protocol
 constants: they describe supported hardware, not an individual unit. Examples
 and tests use placeholders or synthetic identities. RAM test fixtures are

@@ -6,6 +6,9 @@
 #include <filesystem>
 #ifdef ASB_APEX6_LIVE_RUNNER
 #include "apex6/live/Live.h"
+#ifdef ASB_APEX6_INTEGRATED
+#include "apex6/dongle/Pulse.h"
+#endif
 #endif
 
 namespace asb::apex6::experiment {
@@ -65,6 +68,17 @@ std::unique_ptr<WindowsTransport> openLiveTransport(const live::Authorization&,c
 // Production entry points have no experimental approval-file decoder.
 std::unique_ptr<WindowsTransport> openIntegratedBaselineTransport(const Binding&,const std::function<bool()>& cancelled);
 std::unique_ptr<WindowsTransport> openIntegratedTransport(const GripBaseline&,live::Policy,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck);
+// Dongle diagnostic: keep one exclusive handle across two exact readbacks and
+// the neutral lifecycle. Each 14-query readback is followed by a validated UID
+// boundary query; promotion requires all 30 requests on this handle.
+std::unique_ptr<WindowsTransport> openDongleBaselineTransport(const Binding&,const std::function<bool()>& cancelled);
+void promoteDongleNeutralTransport(WindowsTransport&,const GripBaseline&,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,live::ReplyBoundary = live::ReplyBoundary::None);
+// Fixed low-amplitude pulse; side is immutable, with validated shutdown boundaries.
+void promoteDonglePulseTransport(WindowsTransport&,const GripBaseline&,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,dongle::PulseSide = dongle::PulseSide::Left);
+void promoteDongleLiveTransport(WindowsTransport&,const GripBaseline&,live::Policy,
     const std::function<bool()>& cancelled,const std::function<void()>& entryCheck);
 #endif
 #endif

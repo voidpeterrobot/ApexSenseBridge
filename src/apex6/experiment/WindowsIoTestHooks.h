@@ -22,6 +22,9 @@ std::unique_ptr<WindowsTransport> makeInputListenerForTest(const Binding&,HANDLE
 std::unique_ptr<WindowsTransport> makeRam5DiagnosticForTest(const Binding&,HANDLE,WindowsIoHooks);
 #ifdef ASB_APEX6_LIVE_RUNNER
 std::unique_ptr<WindowsTransport> makeLiveIoForTest(const live::Authorization&,HANDLE,WindowsIoHooks,const std::function<std::int64_t()>&,const std::function<bool()>&);
+#ifdef ASB_APEX6_INTEGRATED
+std::unique_ptr<WindowsTransport> makeDongleBaselineIoForTest(const Binding&,HANDLE,WindowsIoHooks);
+#endif
 #endif
 #ifdef ASB_APEX6_NEUTRAL_RUNNER
 std::unique_ptr<WindowsTransport> makeGripPulseIoForTest(const GripPulseAuthorization&,HANDLE,WindowsIoHooks,const std::function<std::int64_t()>& clock,const std::function<bool()>& cancelled);

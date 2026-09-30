@@ -7,6 +7,9 @@
 #include <bcrypt.h>
 #include "apex6/experiment/WindowsIo.h"
 #include "apex6/experiment/WindowsIoTestHooks.h"
+#ifdef ASB_APEX6_INTEGRATED
+#include "apex6/dongle/Pulse.h"
+#endif
 #include "platform/HidDiscovery.h"
 #include <algorithm>
 #include <fstream>
@@ -141,12 +144,36 @@ public:
     ~WindowsIo() override {closePending();if(handle_!=INVALID_HANDLE_VALUE&&!unresolved_)CloseHandle(handle_);}
 #ifdef ASB_APEX6_LIVE_RUNNER
 #ifdef ASB_APEX6_INTEGRATED
+    bool dongleNeutral_=false;
+    dongle::PulseSide donglePulse_=dongle::PulseSide::None;
+    unsigned dongleWaves_=0;
+    void authorizeDongleNeutral(const GripBaseline& baseline,
+        const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,live::ReplyBoundary boundary,dongle::PulseSide side=dongle::PulseSide::None) {
+        try {
+        require(gripReports_.size()==30&&gripIndex_==30&&!stopped_,"dongle requires two completed query sequences and UID boundaries on this handle");
+        gripReports_.clear();gripIndex_=0;
+        authorizeIntegrated(baseline,{1,1,false},cancelled,entryCheck);
+        live_=std::make_unique<live::NativeGuard>(baseline,live::Policy{1,1,false},now(),boundary);
+        dongleNeutral_=true;
+        require(side==dongle::PulseSide::None||(dongle::validPulseSide(side)&&boundary==live::ReplyBoundary::DongleUidDiagnostic),"dongle pulse requires valid side and UID boundaries");
+        donglePulse_=side;
+        }catch(...){stopped_=true;throw;}
+    }
     void authorizeIntegrated(const GripBaseline& baseline,live::Policy policy,
         const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
         require(binding_==baseline.binding&&baseline.physicalOrigin&&bool(cancelled)&&bool(entryCheck),"integrated binding/controls missing");
         entryCheck();
         live_=std::make_unique<live::NativeGuard>(baseline,policy,now());
         liveCancelled_=cancelled;liveEntryCheck_=entryCheck;timings_.resize(4096);
+    }
+    void authorizeDongleLive(const GripBaseline& baseline,live::Policy policy,
+        const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
+        try {
+            require(gripReports_.size()==30&&gripIndex_==30&&!stopped_,"dongle live requires completed startup boundaries on this handle");
+            gripReports_.clear();gripIndex_=0;
+            authorizeIntegrated(baseline,policy,cancelled,entryCheck);
+            live_=std::make_unique<live::NativeGuard>(baseline,policy,now(),live::ReplyBoundary::DongleLiveDiagnostic);
+        }catch(...){stopped_=true;throw;}
     }
 #endif
     void authorizeLive(const live::Authorization& a,const std::function<std::int64_t()>& clock,const std::function<bool()>& cancelled) {
@@ -179,6 +206,15 @@ public:
         if(binding_.access!=AccessMode::Shared)throw ProtocolError("grip baseline requires shared access");
         for(const auto& r:gripBaselinePlan())gripReports_.push_back(binding_.layout.wrap(frame(r.command,r.payload)));
     }
+#ifdef ASB_APEX6_INTEGRATED
+    void restrictDongleBaselines() {
+        require(binding_.access==AccessMode::Shared&&gripReports_.empty(),"invalid dongle baseline binding");
+        for(unsigned i=0;i<2;++i){
+            for(const auto& r:gripBaselinePlan())gripReports_.push_back(binding_.layout.wrap(frame(r.command,r.payload)));
+            gripReports_.push_back(binding_.layout.wrap(frame(4)));
+        }
+    }
+#endif
     std::span<const NativeTiming> timings() const override{return {timings_.data(),timingCount_};}
     bool timingComplete() const override{return !timingOverflow_;}
     bool finish() override {stopped_=true;closePending(true);return !unresolved_;}
@@ -232,6 +268,14 @@ public:
     }
     IoResult write(std::span<const std::uint8_t> wire,Time deadline) override {
         if(inputOnly_){stopped_=true;return {Completion::Failed,{},0,ERROR_ACCESS_DENIED};}
+#ifdef ASB_APEX6_INTEGRATED
+        if(dongleNeutral_&&wire.size()>3&&wire[3]==0x57) {
+            if(donglePulse_!=dongle::PulseSide::None?!dongle::allowedPulseWave(wire,dongleWaves_,donglePulse_):(dongleWaves_>=11||Bytes(wire.begin(),wire.end())!=binding_.layout.wrap(gripWaveform({})))) {
+                stopped_=true;return {Completion::Failed,{},0,ERROR_ACCESS_DENIED};
+            }
+            ++dongleWaves_;
+        }
+#endif
         bool allowed=queryOnly(wire,binding_.layout);
 #ifdef ASB_APEX6_LIVE_RUNNER
         if(live_){allowed=liveReady();deadline=live_->deadline(deadline);}
@@ -453,11 +497,35 @@ std::unique_ptr<WindowsTransport> openIntegratedBaselineTransport(const Binding&
     try {auto io=std::make_unique<WindowsIo>(b,false,true);io->restrictGripBaseline();io->setQueryCancellation(cancelled);return io;}
     catch(const std::exception& e){throw ProtocolError(std::string("Cannot acquire exclusive Apex6 vendor access. Close Flydigi Space Station, stop its service and close competing writers: ")+e.what());}
 }
+std::unique_ptr<WindowsTransport> openDongleBaselineTransport(const Binding& b,const std::function<bool()>& cancelled) {
+    require(bool(cancelled)&&!cancelled(),"dongle baseline cancelled");
+    auto io=std::make_unique<WindowsIo>(b,false,true);
+    io->restrictDongleBaselines();io->setQueryCancellation(cancelled);return io;
+}
+std::unique_ptr<WindowsTransport> makeDongleBaselineIoForTest(const Binding& b,HANDLE h,WindowsIoHooks hooks) {
+    auto io=std::make_unique<WindowsIo>(b,h,std::move(hooks));io->restrictDongleBaselines();return io;
+}
+void promoteDongleNeutralTransport(WindowsTransport& transport,const GripBaseline& baseline,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,live::ReplyBoundary boundary) {
+    auto* io=dynamic_cast<WindowsIo*>(&transport);require(io!=nullptr,"wrong dongle native transport");
+    io->authorizeDongleNeutral(baseline,cancelled,entryCheck,boundary);
+}
+void promoteDonglePulseTransport(WindowsTransport& transport,const GripBaseline& baseline,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,dongle::PulseSide side) {
+    auto* io=dynamic_cast<WindowsIo*>(&transport);require(io!=nullptr,"wrong dongle native transport");
+    // Invalid selections also latch the transport through the authorization gate.
+    io->authorizeDongleNeutral(baseline,cancelled,entryCheck,live::ReplyBoundary::DongleUidDiagnostic,side==dongle::PulseSide::None?static_cast<dongle::PulseSide>(-1):side);
+}
 std::unique_ptr<WindowsTransport> openIntegratedTransport(const GripBaseline& b,live::Policy p,
     const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
     require(!cancelled(),"integrated session cancelled");
     auto io=std::make_unique<WindowsIo>(b.binding,false,true);
     io->authorizeIntegrated(b,p,cancelled,entryCheck);return io;
+}
+void promoteDongleLiveTransport(WindowsTransport& transport,const GripBaseline& baseline,live::Policy policy,
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
+    auto* io=dynamic_cast<WindowsIo*>(&transport);require(io!=nullptr,"wrong dongle live native transport");
+    io->authorizeDongleLive(baseline,policy,cancelled,entryCheck);
 }
 #endif
 std::unique_ptr<WindowsTransport> makeLiveIoForTest(const live::Authorization& a,HANDLE h,WindowsIoHooks hooks,const std::function<std::int64_t()>& clock,const std::function<bool()>& cancelled){auto io=std::make_unique<WindowsIo>(a.baseline().binding,h,std::move(hooks));io->authorizeLive(a,clock,cancelled);return io;}

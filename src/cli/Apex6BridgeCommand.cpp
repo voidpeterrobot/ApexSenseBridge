@@ -84,6 +84,9 @@ const char* sourceName(live::Stream::Source source){switch(source){
 int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions& options,
     platform::SessionControl* session,platform::GlobalSessionStop& globalStop) {
     std::string error;
+    const auto diagnosticStart=live::monotonic();
+    const bool dongle=options.apex6DongleDiagnostic||options.apex6DongleBeta;
+    const char* sessionScope=options.apex6DongleDiagnostic?"apex6-dongle-live-diagnostic-v1":dongle?"apex6-dongle-beta-v1":"apex6-integrated-beta-v1";
     auto publish=[&](platform::SessionPhase phase,int code,const std::string& message){
         if(session){require(session->publish(phase,code,message,error),error);
             if(phase==platform::SessionPhase::Ready||phase==platform::SessionPhase::Failed)require(session->signalReady(error),error);}
@@ -129,11 +132,12 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         require(!options.xinputIndex&&!options.hapticThresholdExplicit&&!options.verifyVirtualInput,
             "Apex6 uses verified physical input and raw grip output; XInput overrides, summary thresholds and virtual-input diagnostics are unsupported.");
         require(options.virtualBackend!=dualsense::VirtualDualSenseBackend::Sidecar&&options.viiperExecutable.empty(),"Apex6 requires the integrated asb9-or-later libVIIPER; sidecar is unsupported.");
-        if(options.apex6Consent)platform::updateApex6Settings(platform::kApex6ConsentVersion,std::nullopt);
+        if(options.apex6Consent&&!options.apex6DongleDiagnostic)platform::updateApex6Settings(platform::kApex6ConsentVersion,std::nullopt);
         auto settings=platform::readApex6Settings();
-        require(settings.consentVersion==platform::kApex6ConsentVersion,
+        require(options.apex6DongleDiagnostic||settings.consentVersion==platform::kApex6ConsentVersion,
             "Apex6 Pro is an integrated grip-only USB beta. Enable Apex6 beta in Tray/Playnite or pass --apex6-beta-consent once. Physical qualification remains pending; faults require operator recovery. Start before launching the game.");
-        if(options.gripGain){platform::updateApex6Settings(std::nullopt,options.gripGain);settings.gain=*options.gripGain;}
+        if(options.apex6DongleDiagnostic)settings.gain=1;
+        if(options.gripGain){if(!options.apex6DongleDiagnostic)platform::updateApex6Settings(std::nullopt,options.gripGain);settings.gain=*options.gripGain;}
         targetGain=settings.gain;
         gainChanges.emplace_back(live::monotonic(),settings.gain);
         stream=std::make_unique<live::Stream>(settings.gain,live::Stream::HidLifetime::UntilChanged);
@@ -151,7 +155,16 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         require(isolation.activate(selected,options.sessionToken.value_or(""),std::nullopt,error),error);
         auto binding=ex::inspectInterface(selected);binding.access=ex::AccessMode::Shared;
         ex::GripBaseline baseline;
-        for(unsigned i=0;i<2;++i){
+        if(dongle){
+            io=ex::openDongleBaselineTransport(binding,cancelled);
+            for(unsigned i=0;i<2;++i){
+                ex::Session acquisition(*io,trace);const auto observed=ex::acquireGripBaseline(acquisition);
+                if(i)require(observed==baseline,"The two dongle startup baselines differ.");baseline=observed;
+                ex::Session separator(*io,trace);const ex::Request uidQuery{4,{},16};
+                separator.begin("dongle_startup_uid_boundary",Time(2000000),1,{uidQuery});
+                require(ex::uid(separator.exchange(uidQuery))==baseline.unit,"Dongle startup UID changed.");separator.end();
+            }
+        }else for(unsigned i=0;i<2;++i){
             auto query=ex::openIntegratedBaselineTransport(binding,cancelled);ex::Session acquisition(*query,trace);
             const auto observed=ex::acquireGripBaseline(acquisition);
             require(query->finish()&&query->timingComplete(),"Baseline native finalization failed.");
@@ -163,7 +176,8 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         supervisorProgress=live::monotonic().count();
         // Hold exclusive access throughout the ready/idle period. Opening this
         // guard sends no reports; its first writes are the fresh entry preflight.
-        io=ex::openIntegratedTransport(baseline,policy,cancelled,entryCheck);
+        if(dongle)ex::promoteDongleLiveTransport(*io,baseline,policy,cancelled,entryCheck);
+        else io=ex::openIntegratedTransport(baseline,policy,cancelled,entryCheck);
         auto gamepads=capture::captureInputDevices(error);require(error.empty(),error);
         std::erase_if(gamepads,[&](const auto& pad){return pad.containerId!=selected.containerId;});
         require(gamepads.size()==1,"Selected Apex6 must have exactly one gamepad interface in its verified container.");
@@ -214,7 +228,7 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
                     else if(key=='1')targetGain=1;
                 }
                 const auto gain=targetGain.load();
-                if(gain!=savedGain){platform::updateApex6Settings(std::nullopt,gain);savedGain=gain;}
+                if(gain!=savedGain){if(!options.apex6DongleDiagnostic)platform::updateApex6Settings(std::nullopt,gain);savedGain=gain;}
                 if(!finishing&&now>=nextHealth){std::string local;if(!isolation.healthy(local)){queue.fail("physical isolation or competing-writer check failed");break;}nextHealth=live::monotonic()+Time(500000);}
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -225,8 +239,8 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         // ordinary scheduling, and scope exit restores this thread on every path.
         OutputScheduling outputScheduling;
         outputScheduling.enable();multimediaScheduling=true;
-        publish(platform::SessionPhase::Ready,0,"Apex6 beta ready, awaiting feedback. Game launch may continue.");
-        std::cout<<"Apex6 USB grip beta ready, awaiting feedback. Q: orderly stop; +/-: gain; 0: mute; 1: reset. Ctrl+C: fail-stop.\n";
+        publish(platform::SessionPhase::Ready,0,dongle?"Apex6 dongle beta ready, awaiting feedback (10 min active / 20 min total). Game launch may continue.":"Apex6 beta ready, awaiting feedback. Game launch may continue.");
+        std::cout<<(dongle?"Apex6 DONGLE BETA ready, awaiting feedback. Maximum 10 minutes active / 20 minutes total. ":"Apex6 USB grip beta ready, awaiting feedback. ")<<"Q: orderly stop; +/-: gain; 0: mute; 1: reset. Ctrl+C: fail-stop."<<std::endl;
         auto nextStatus=live::monotonic();auto lastSource=live::Stream::Source::AwaitingFeedback;
         unsigned sourceMessages=0;
         double appliedGain=settings.gain;
@@ -245,13 +259,14 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
             const auto now=live::monotonic();
             if(now>=nextStatus){const auto source=stream->source(now);if(source!=lastSource){
                 publish(platform::SessionPhase::Ready,0,std::string("Apex6 beta: ")+sourceName(source)+"; gain "+std::to_string(appliedGain));
-                if(sourceMessages++<64)std::cout<<sourceName(source)<<"; gain "<<appliedGain<<'\n';
+                if(sourceMessages++<64)std::cout<<sourceName(source)<<"; gain "<<appliedGain<<std::endl;
                 else if(sourceMessages==65)std::cout<<"Further source changes remain available in session status; routine console logging is capped.\n";
                 lastSource=source;
             }nextStatus=now+Time(1000000);}
         };
         const auto readyAt=live::monotonic();
-        auto stop=[&]{return orderly.load()||(options.duration&&live::monotonic()-readyAt>=*options.duration);};
+        auto stop=[&]{return orderly.load()||(options.duration&&live::monotonic()-readyAt>=*options.duration)||
+            (dongle&&live::monotonic()-diagnosticStart>=Time(1190000000));};
         while(!stop()){
             require(!cancelled(),queue.failed()?queue.failure():"Session cancelled; no recovery commands sent.");pump();
             // Gain does not affect eligibility. Silence and explicit zero may
@@ -268,7 +283,7 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
             live::Control control{[&](Time due){wait.waitUntil(due);},cancelled,stop,pump,
                 [&](Time now){return stream->packet(now);},[&]{pump();stream->discardPcm();},
                 [&](Time now){io->stopLive(now);},[&]{workerProgress=live::monotonic().count();}};
-            result=live::run(*io,trace,baseline,policy,control,entryCheck);
+            result=live::run(*io,trace,baseline,policy,control,entryCheck,dongle?live::ReplyBoundary::DongleLiveDiagnostic:live::ReplyBoundary::None);
         }
     } catch(const std::exception& e){result.complete=false;result.failure=e.what();result.stopReason="failure";}
     finishing=true;
@@ -286,8 +301,8 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
     if(queue.failed()){result.complete=false;result.failure+=std::string("; ")+queue.failure();}
     if(audio.captured()&&!audio.protectAfterVirtualDualSenseStart(std::chrono::milliseconds(250),error)){result.complete=false;result.failure+="; "+error;}
     if(!isolation.restore(error)){result.complete=false;result.failure+="; isolation restore failed: "+error;}
-    result.integratedBeta=true;result.strictDispatch=false;
-    std::ostringstream telemetry;telemetry<<"{\"schema\":1,\"integrated_beta\":true,\"physical_qualification\":\"pending\",\"executable_sha256\":"<<ex::json(executableHash)<<",\"library_sha256\":"<<ex::json(libraryHash)<<",\"gain\":"<<targetGain.load()<<",\"native_events\":"<<nativeEvents<<",\"output_scheduling\":"<<ex::json(multimediaScheduling?"mmcss_pro_audio_high":"not_registered");
+    result.integratedBeta=!options.apex6DongleDiagnostic;result.strictDispatch=false;
+    std::ostringstream telemetry;telemetry<<"{\"schema\":1,\"scope\":"<<ex::json(sessionScope)<<",\"integrated_beta\":"<<(options.apex6DongleDiagnostic?"false":"true")<<",\"physical_qualification\":\"pending\",\"executable_sha256\":"<<ex::json(executableHash)<<",\"library_sha256\":"<<ex::json(libraryHash)<<",\"gain\":"<<targetGain.load()<<",\"native_events\":"<<nativeEvents<<",\"output_scheduling\":"<<ex::json(multimediaScheduling?"mmcss_pro_audio_high":"not_registered");
     if(stream){const auto& m=stream->metrics();auto q=queue.metrics();telemetry<<",\"raw_records\":"<<q.records<<",\"peak_queue_bytes\":"<<q.peakBytes<<",\"pcm_records\":"<<m.validRecords<<",\"hid_accepted\":"<<m.hidAccepted<<",\"hid_samples\":"<<m.hidSamples<<",\"dropped_pcm\":"<<m.droppedSamples<<",\"stale_records\":"<<m.staleRecords<<",\"clipped_samples\":"<<m.strength.clippedSamples<<",\"peak_before_limit\":"<<m.strength.peakBeforeLimit<<",\"peak_after_limit\":"<<m.strength.peakAfterLimit<<",\"applied_gain\":"<<stream->gain();}
     telemetry<<",\"recent_gain_targets\":[";
     for(std::size_t i=0;i<gainChanges.size();++i){if(i)telemetry<<',';telemetry<<"{\"time_us\":"<<gainChanges[i].first.count()<<",\"gain\":"<<gainChanges[i].second<<'}';}telemetry<<']';
@@ -296,7 +311,9 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         telemetry<<"{\"time_us\":"<<t.observed.count()<<",\"event\":"<<ex::json(t.event)<<",\"operation\":"<<t.operation<<",\"transferred\":"<<t.transferred<<",\"error\":"<<t.error;
         if(t.waited)telemetry<<",\"deadline_us\":"<<t.deadline.count()<<",\"wait_ms\":"<<t.waitMs<<",\"wait_result\":"<<t.waitResult;
         telemetry<<'}';}telemetry<<']';
-    telemetry<<",\"lifecycle\":"<<live::resultJson(result)<<",\"mode_evidence\":[";
+    auto lifecycle=live::resultJson(result);
+    if(dongle){const std::string oldScope=result.integratedBeta?"apex6-integrated-beta-v1":live::scope;const auto pos=lifecycle.find(oldScope);if(pos!=std::string::npos)lifecycle.replace(pos,oldScope.size(),sessionScope);}
+    telemetry<<",\"lifecycle\":"<<lifecycle<<",\"mode_evidence\":[";
     for(std::size_t i=0;i<trace.events.size();++i){if(i)telemetry<<',';telemetry<<trace.events[i];}telemetry<<"]}\n";
     try {
         auto path=options.telemetryJson;

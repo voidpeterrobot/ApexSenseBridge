@@ -5,7 +5,7 @@ integrated build. Existing Apex4/5 sessions retain their existing backend.
 
 ## Starting a session
 
-Use direct USB. Close Flydigi Space Station and stop its service and other
+Direct USB is the default. Close Flydigi Space Station and stop its service and other
 controller writers. The bridge checks this and never restarts Flydigi or changes
 its startup configuration. Disconnect unrelated XInput controllers. HidHide must
 have no active/inverse or pre-existing hidden-device configuration for this beta.
@@ -43,8 +43,32 @@ CLI example, after `ApexSenseBridge list`:
 Consent is stored once. Subsequent runs omit `--apex6-beta-consent`. With multiple
 eligible controllers, an explicit current list index is required. The UI control
 panel accepts that index; it never persists a machine-specific device instance ID.
-Sessions run continuously unless `--seconds` is supplied. No game is launched by
+USB sessions run continuously unless `--seconds` is supplied. No game is launched by
 the CLI or the implementation/build scripts.
+
+### Experimental 2.4 GHz dongle
+
+In the Tray's shared grip controls, enable **Use 2.4 GHz dongle (experimental)**
+before starting the bridge. Leave it off for direct USB. The option defaults off,
+is saved in Tray settings, and cannot change an active session. Normal packages
+include this path; no experimental executable is needed. CLI users add
+`--apex6-dongle-beta` to the usual `bridge-triggers` command. Apex6 beta consent
+is still required, and the existing gain/mute/reset controls apply.
+
+Dongle sessions stop after ten minutes of active feedback or twenty minutes
+overall. Whitelist Launch prepares isolation first, and game exit or **Stop
+bridge** requests orderly shutdown. Close the game before preparing another
+session. Do not close the engine console or kill its process to stop normally:
+forced termination can leave input working but require a full controller restart
+to restore vibration. The same recovery requirement can apply after disconnects
+or I/O faults. This selection is currently exposed in Tray/CLI; Playnite retains
+its USB-only Apex6 path.
+
+Supervised dongle checks confirmed left/right/both pulses with normal recovery,
+and the operator reported successful Endfield gameplay. That game run ended by
+closing the console, left no final session report, and required a controller
+restart for vibration. Game-session orderly shutdown and radio-loss behavior
+remain pending. See [the evidence and limits](APEX6_DONGLE_INVESTIGATION.md).
 
 ## Output and controls
 
@@ -78,7 +102,8 @@ priority); this reduces scheduling contention without relaxing the native deadli
 
 Before readiness, the engine verifies isolation, two matching startup baselines,
 input and virtual attachment. An exclusive vendor handle remains held while
-waiting indefinitely for eligible feedback. Waiting sends no actuator commands.
+waiting for eligible feedback (indefinitely for USB, bounded for the dongle beta).
+Waiting sends no actuator commands.
 The fresh entry preflight occurs on that handle immediately before grip entry.
 Only one worker submits vendor reports; input/control and watchdog paths are
 separate. Executable/library hashes are pinned and rechecked at entry. The DLL

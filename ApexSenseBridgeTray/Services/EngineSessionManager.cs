@@ -272,6 +272,7 @@ namespace ApexSenseBridgeTray.Services
         {
             var args = new List<string> { "bridge-triggers" };
             if (apex6) args.Add("--controller-model apex6-pro");
+            if (apex6 && settings != null && settings.Apex6DongleBeta) args.Add("--apex6-dongle-beta");
             if (global::ApexSenseBridge.Shared.Apex6Beta.ControllerIndex.HasValue)
                 args.Add(global::ApexSenseBridge.Shared.Apex6Beta.ControllerIndex.Value.ToString(CultureInfo.InvariantCulture));
 

@@ -39,9 +39,10 @@ private:
 };
 // Used independently at the session and native submission boundaries. Only
 // requestStop transitions streaming to a two-neutral-packet tail, irreversibly.
+enum class ReplyBoundary { None, DongleUidDiagnostic, DongleLiveDiagnostic };
 class NativeGuard {
 public:
-    NativeGuard(const GripBaseline&,Policy,Time start);
+    NativeGuard(const GripBaseline&,Policy,Time start,ReplyBoundary = ReplyBoundary::None);
     void checkTime(Time);
     Time deadline(Time)const;
     void beforeWrite(std::span<const std::uint8_t>,Time);
@@ -50,8 +51,9 @@ public:
     void requestStop(Time);
     bool entryNext()const{return phase_==Phase::Entry;}
     bool complete()const{return phase_==Phase::Done;}
+    bool boundaryNext()const{return boundaryPending_;}
     Time due()const;
-    Time streamEnd()const{return policy_.continuous()?Time::max()-Time(2000):entry_+Time(policy_.seconds*1000000LL);}
+    Time streamEnd()const{return boundary_==ReplyBoundary::DongleLiveDiagnostic?entry_+Time(600000000):policy_.continuous()?Time::max()-Time(2000):entry_+Time(policy_.seconds*1000000LL);}
 private:
     enum class Phase {Preflight,Entry,Lead,Stream,Tail,Exit,Left,Right,Postflight,Done};
     void advance();
@@ -63,6 +65,7 @@ private:
     bool failed_=false,pendingWrite_=false,pendingReply_=false;
     Time last_{},sessionEnd_{},entry_{},entryReply_{},lastWave_{},lastComplete_{},writeEnd_{},stopAt_{};
     bool haveWave_=false;
+    ReplyBoundary boundary_;Uid unit_{};bool boundaryPending_=false;
 };
 struct Control {
     std::function<void(Time)> waitUntil;
@@ -82,6 +85,6 @@ struct Result {
     std::string stopReason,failure;
     std::array<ModeReply,2> restores{ModeReply::NotObserved,ModeReply::NotObserved};
 };
-Result run(Io&,Trace&,const GripBaseline&,Policy,const Control&,const std::function<void()>& authorize={});
+Result run(Io&,Trace&,const GripBaseline&,Policy,const Control&,const std::function<void()>& authorize={},ReplyBoundary = ReplyBoundary::None);
 std::string resultJson(const Result&);
 }

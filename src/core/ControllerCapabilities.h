@@ -10,7 +10,9 @@ struct ControllerCapabilities {
     bool onboardProfiles = false;
     bool rawGripOutput = false;
 };
-// Direct-USB Apex6 vendor collection. Instance suffixes are discovered afresh.
+// Apex6 vendor collection. Instance suffixes are discovered afresh. These
+// descriptors can also be exposed by a receiver; matching does not prove USB
+// cable attachment or qualify wireless output (see APEX6_DONGLE_INVESTIGATION.md).
 inline bool isApex6Vendor(const HidDeviceInfo& d) {
     return d.vendorId == 0x37d7 && d.productId == 0x2502 &&
         d.usagePage == 0xffa0 && d.interfaceNumber == L"MI_02" &&

@@ -23,8 +23,9 @@ Authorization Authorization::approve(const GripBaseline& b,Policy p,const Approv
 void Authorization::check(std::int64_t now)const{policy_.validate();gripLifecyclePlan(baseline_);require(approval_.liveAccepted,"live consent missing");const auto active=activated_->load();require(active<0||now>=active,"live authorization clock reversed");GripRestoreAuthorization::approve(baseline_,approval_.checkpoints,hash_,policy_.continuous()&&active>=0?active:now);}
 void Authorization::activate(std::int64_t now)const{check(now);require(!consumed_->load(),"live authorization already consumed");if(policy_.continuous()){std::int64_t expected=-1;require(activated_->compare_exchange_strong(expected,now),"live session already activated");}}
 void Authorization::consume()const{require(!consumed_->exchange(true),"live authorization already consumed");}
-NativeGuard::NativeGuard(const GripBaseline& b,Policy p,Time start):layout_(b.binding.layout),policy_(p),queries_(gripBaselinePlan()),modes_(gripLifecyclePlan(b)),last_(start) {
-    p.validate();require(start.count()>=0&&start<Time::max()-Time(240000000),"invalid live clock origin");sessionEnd_=p.continuous()?Time::max():start+Time(240000000);
+NativeGuard::NativeGuard(const GripBaseline& b,Policy p,Time start,ReplyBoundary boundary):layout_(b.binding.layout),policy_(p),queries_(gripBaselinePlan()),modes_(gripLifecyclePlan(b)),last_(start),boundary_(boundary),unit_(b.unit) {
+    require(boundary==ReplyBoundary::None||(boundary==ReplyBoundary::DongleUidDiagnostic&&p.seconds==1&&!p.strictDispatch)||(boundary==ReplyBoundary::DongleLiveDiagnostic&&p.continuous()&&!p.strictDispatch),"invalid diagnostic reply boundary policy");
+    p.validate();require(start.count()>=0&&start<Time::max()-Time(1200000000),"invalid live clock origin");sessionEnd_=boundary==ReplyBoundary::DongleLiveDiagnostic?start+Time(1200000000):p.continuous()?Time::max():start+Time(240000000);
 }
 [[noreturn]] void NativeGuard::fail(const char* why){failed_=true;throw ProtocolError(why);}
 void NativeGuard::checkTime(Time t){if(failed_||t<last_||t>=sessionEnd_||(phase_==Phase::Stream&&t>streamEnd()+Time(2000))||(stopAt_.count()&&phase_!=Phase::Postflight&&phase_!=Phase::Done&&t>=stopAt_+Time(5000000)))fail("live native clock/deadline/failure");last_=t;}
@@ -46,7 +47,9 @@ void NativeGuard::beforeWrite(std::span<const std::uint8_t> wire,Time t) {
             if(phase_==Phase::Stream)require((policy_.continuous()||streamed_<7500)&&t<streamEnd(),"live streaming duration/budget");
         }else {
             const Request* r=nullptr;
-            if(phase_==Phase::Preflight||phase_==Phase::Postflight)r=&queries_.at(query_);
+            const Request boundaryQuery{4,{},16};
+            if(boundaryPending_)r=&boundaryQuery;
+            else if(phase_==Phase::Preflight||phase_==Phase::Postflight)r=&queries_.at(query_);
             else r=&modes_.at(phase_==Phase::Entry?0:phase_==Phase::Exit?1:phase_==Phase::Left?2:3);
             require(layout_.wrap(frame(r->command,r->payload))==Bytes(wire.begin(),wire.end()),"live ordered query/mode mismatch");
             if(phase_==Phase::Exit)require(t>=due()&&(!policy_.strictDispatch||t<=due()+Time(2000)),"live tail hold/exit deadline");
@@ -58,7 +61,7 @@ void NativeGuard::beforeWrite(std::span<const std::uint8_t> wire,Time t) {
 void NativeGuard::afterWrite(const IoResult& r,Time submitted,Time completed) {
     try {
         checkTime(completed);require(pendingWrite_&&r.status==Completion::Complete&&r.transferred==33&&completed>=submitted&&completed<writeEnd_,"live incomplete/late native write");pendingWrite_=false;
-        if(phase_==Phase::Lead||phase_==Phase::Stream||phase_==Phase::Tail){haveWave_=true;lastWave_=submitted;lastComplete_=completed;if(phase_==Phase::Lead)phase_=Phase::Stream;else if(phase_==Phase::Stream)++streamed_;else if(++tail_==2)phase_=Phase::Exit;}
+        if(phase_==Phase::Lead||phase_==Phase::Stream||phase_==Phase::Tail){haveWave_=true;lastWave_=submitted;lastComplete_=completed;if(phase_==Phase::Lead)phase_=Phase::Stream;else if(phase_==Phase::Stream)++streamed_;else if(++tail_==2){phase_=Phase::Exit;boundaryPending_=boundary_!=ReplyBoundary::None;}}
         else pendingReply_=true;
     }catch(...){failed_=true;throw;}
 }
@@ -68,12 +71,14 @@ void NativeGuard::advance() {
     else if(phase_==Phase::Exit)phase_=Phase::Left;
     else if(phase_==Phase::Left)phase_=Phase::Right;
     else if(phase_==Phase::Right)phase_=Phase::Postflight;
+    boundaryPending_=boundary_!=ReplyBoundary::None&&(phase_==Phase::Left||phase_==Phase::Right);
 }
 void NativeGuard::afterRead(const IoResult& r,Time t) {
     try {
         checkTime(t);if(r.status==Completion::Idle&&r.bytes.empty())return;
         require(pendingReply_&&r.status==Completion::Complete&&r.transferred==33&&r.bytes.size()==33&&t<writeEnd_,"live unsolicited/incomplete/late native reply");
         const auto body=layout_.unwrap(r.bytes);
+        if(boundaryPending_){const auto payload=replyPayload(body,4,16);require(payload.has_value()&&uid(*payload)==unit_,"dongle boundary UID mismatch");pendingReply_=false;boundaryPending_=false;return;}
         if(phase_==Phase::Preflight||phase_==Phase::Postflight){const auto& q=queries_[query_];require(replyPayload(body,q.command,q.replySize,q.v21).has_value(),"live query reply mismatch");}
         else {const auto c=classifyModeReply(body);require(c==ModeReply::NormalSuccessAck||((phase_==Phase::Left||phase_==Phase::Right)&&c==ModeReply::CapturedZeroCountValue1),"live mode reply rejected");}
         if(phase_==Phase::Entry)entryReply_=t;
@@ -103,12 +108,12 @@ public:
     }
     Io& io;Trace& trace;NativeGuard& g;const Control& c;Result& result;Time end;bool failed=false;
 };
-Result run(Io& io,Trace& trace,const GripBaseline& baseline,Policy policy,const Control& c,const std::function<void()>& authorize) {
+Result run(Io& io,Trace& trace,const GripBaseline& baseline,Policy policy,const Control& c,const std::function<void()>& authorize,ReplyBoundary boundary) {
     Result result;result.strictDispatch=policy.strictDispatch;
     try {
         policy.validate();require(c.waitUntil&&c.cancelled&&c.stopRequested&&c.pump&&c.packet&&c.discard&&c.nativeStop,"live controls missing");
         require(!io.physical()||bool(authorize),"physical live requires authorization");
-        NativeGuard guard(baseline,policy,io.now());CheckedIo checked(io,trace,guard,c,result,policy.continuous());
+        NativeGuard guard(baseline,policy,io.now(),boundary);CheckedIo checked(io,trace,guard,c,result,policy.continuous());
         auto expected=baseline;if(!io.physical()){expected.physicalOrigin=false;expected.binding.access=AccessMode::Synthetic;}
         if(authorize)authorize();Session preflight(checked,trace);require(acquireGripBaseline(preflight)==expected,"live preflight changed");
         if(c.stopRequested()) {result.complete=true;result.stopReason="stopped_before_entry";return result;}
@@ -136,7 +141,15 @@ Result run(Io& io,Trace& trace,const GripBaseline& baseline,Policy policy,const 
         }
         c.discard();guard.requestStop(io.now());c.nativeStop(io.now());
         send(gripWaveform({}),false);send(gripWaveform({}),false);
-        for(unsigned i=1;i<4;++i)send(frame(modes[i].command,modes[i].payload),true,i);
+        for(unsigned i=1;i<4;++i){
+            if(guard.boundaryNext()){
+                if(i==1)wait(guard.due());
+                Session separator(checked,trace);const Request query{4,{},16};
+                separator.begin("dongle_shutdown_uid_boundary",Time(2000000),1,{query});
+                require(uid(separator.exchange(query))==baseline.unit,"dongle shutdown UID changed");separator.end();
+            }
+            send(frame(modes[i].command,modes[i].payload),true,i);
+        }
         Session postflight(checked,trace);require(acquireGripBaseline(postflight)==expected,"live postflight changed");result.postflightMatches=true;checked.check();require(guard.complete(),"live native lifecycle incomplete");result.complete=true;
     }catch(const std::exception& e){result.failure=e.what();result.stopReason="failure";}
     return result;

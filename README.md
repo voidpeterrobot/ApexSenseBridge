@@ -2,8 +2,9 @@
 
 **Development build: Apex6 Pro integrated beta.** Direct USB grip output is now
 available through `bridge-triggers`, Tray manual pre-start, and Playnite's
-pre-launch hook. Opt-in is disabled by default. Adaptive triggers, wireless and
-onboard-profile switching remain unsupported on Apex6. Integrated hardware
+pre-launch hook. Tray/CLI also offer an explicitly selected experimental 2.4 GHz
+mode, limited to ten minutes of active feedback. Opt-in is disabled by default.
+Adaptive triggers, Bluetooth and onboard-profile switching remain unsupported on Apex6. Integrated hardware
 qualification is pending. See [setup and qualification](docs/APEX6_INTEGRATED_BETA.md).
 
 > **Bridge your Flydigi APEX 4 & APEX 5 controller into a native virtual PlayStation 5 DualSense on Windows.**  
@@ -206,8 +207,9 @@ ctest --test-dir .\build-win -C Release --output-on-failure
 Opt-in Apex6 Pro grip streaming is available through the normal application;
 see the [integrated beta guide](docs/APEX6_INTEGRATED_BETA.md),
 [engineering findings](docs/APEX6_FINDINGS.md), and
-[verification status](docs/APEX6_INTEGRATED_VERIFICATION.md). Adaptive triggers,
-wireless connections and onboard-profile switching remain unsupported on Apex6.
+[verification status](docs/APEX6_INTEGRATED_VERIFICATION.md). Experimental dongle
+findings and recovery limits are recorded [here](docs/APEX6_DONGLE_INVESTIGATION.md).
+Adaptive triggers, Bluetooth and onboard-profile switching remain unsupported on Apex6.
 The separate `ApexSenseBridgeCapture.exe` provides output-isolated input and
 original DualSense PCM [diagnostics](docs/APEX6_CAPTURE.md).
 

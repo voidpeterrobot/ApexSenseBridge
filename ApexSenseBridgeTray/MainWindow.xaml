@@ -325,6 +325,10 @@
                             BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Padding="20,16" Margin="0,0,0,10">
                         <StackPanel>
                             <ContentControl x:Name="GripControlsHost" Foreground="{DynamicResource TextPrimary}"/>
+                            <CheckBox x:Name="ChkApex6Dongle" Content="Use 2.4 GHz dongle (experimental)" Foreground="{DynamicResource TextPrimary}"
+                                      Margin="0,12,0,4" Checked="OnApex6DongleChanged" Unchecked="OnApex6DongleChanged"/>
+                            <TextBlock Text="Leave off for USB. Dongle sessions stop after 10 minutes of active feedback or 20 minutes overall. Start before the game; use Stop bridge when finished. After a disconnect or forced close, vibration may require a full controller restart."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" FontSize="11"/>
                             <Button x:Name="BtnStopBridge" Content="Stop bridge" Style="{StaticResource BtnSecondary}" HorizontalAlignment="Left" Click="OnStopBridge" Margin="0,8,0,0"/>
                         </StackPanel>
                     </Border>

@@ -19,6 +19,7 @@ namespace ApexSenseBridgeTray.Models
         public List<string> ExcludedGames { get; set; }
         public Dictionary<string, int> ApexProfileSlots { get; set; }
         public List<string> LaunchWhitelist { get; set; }
+        public bool Apex6DongleBeta { get; set; }
 
         public TraySettings()
         {

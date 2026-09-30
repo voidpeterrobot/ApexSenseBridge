@@ -42,7 +42,8 @@ namespace ApexSenseBridgeTray
 
             InitializeComponent();
             GripControlsHost.Content = global::ApexSenseBridge.Shared.Apex6Beta.CreateControls(
-                sessionManager.SetGripGain, () => sessionManager.GripStatus);
+                sessionManager.SetGripGain, () => sessionManager.GripStatus, true);
+            ChkApex6Dongle.IsChecked = settings.Apex6DongleBeta;
             RefreshLaunchWhitelist();
 
             UpdateLanguageRadios();
@@ -160,6 +161,7 @@ namespace ApexSenseBridgeTray
             var path = LstLaunchWhitelist.SelectedItem as string;
             if (path == null || launchingGame) return;
             launchingGame = true;
+            ChkApex6Dongle.IsEnabled = false;
             BtnAddWhitelistedGame.IsEnabled = false;
             ChkManualBridge.IsEnabled = false;
             BtnStopBridge.IsEnabled = false;
@@ -182,6 +184,13 @@ namespace ApexSenseBridgeTray
             BtnStopBridge.IsEnabled = false;
             await Task.Run(() => sessionManager.StopSession("Stopped from control center"));
             UpdateSessionStatus();
+        }
+
+        private void OnApex6DongleChanged(object sender, RoutedEventArgs e)
+        {
+            if (!isInitialized) return;
+            settings.Apex6DongleBeta = ChkApex6Dongle.IsChecked == true;
+            settings.Save();
         }
 
         private void OnLanguageOptionChecked(object sender, RoutedEventArgs e)
@@ -214,6 +223,7 @@ namespace ApexSenseBridgeTray
         {
             OnWhitelistSelectionChanged(null, null);
             BtnStopBridge.IsEnabled = sessionManager.IsSessionActive && !launchingGame;
+            ChkApex6Dongle.IsEnabled = !sessionManager.IsSessionActive && !launchingGame;
             PillTriggers.Visibility = sessionManager.HasActiveApex6Session ? Visibility.Collapsed : Visibility.Visible;
             if (sessionManager.IsSessionActive)
             {

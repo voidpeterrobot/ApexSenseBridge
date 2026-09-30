@@ -85,6 +85,8 @@ internal static class TrayLearningTests
             .Deserialize<TraySettings>("{\"AutoDetectGames\":false,\"ExcludedGames\":[\"Existing\"]}");
         Assert(settings.GetLaunchWhitelist().Length == 0 && settings.IsGameExcluded("Existing"),
             "old settings migrate with an empty whitelist and preserve exclusions");
+        Assert(!settings.Apex6DongleBeta, "existing installations default to USB");
+        settings.Apex6DongleBeta = true;
         settings.SetLaunchWhitelisted(@"C:\Games\Example.exe", true);
         settings.SetLaunchWhitelisted(@"c:\games\EXAMPLE.exe", true);
         Assert(settings.GetLaunchWhitelist().Length == 1, "whitelist paths deduplicate case-insensitively");
@@ -97,6 +99,7 @@ internal static class TrayLearningTests
         var reloaded = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<TraySettings>(json);
         Assert(reloaded.IsLaunchWhitelisted(@"C:\Games\Example.exe") && !reloaded.AutoDetectGames,
             "whitelist persists without changing automatic detection settings");
+        Assert(reloaded.Apex6DongleBeta, "explicit dongle opt-in survives settings serialization");
         settings.SetLaunchWhitelisted(@"C:\Games\Example.exe", false);
         Assert(settings.GetLaunchWhitelist().Length == 0, "removing a whitelisted executable revokes launch authorization");
         bool invalid = false;

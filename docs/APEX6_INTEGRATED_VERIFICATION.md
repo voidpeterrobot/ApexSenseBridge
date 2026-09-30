@@ -5,7 +5,23 @@ testing, not complete hardware qualification or publication approval. Public
 findings are summarized in [APEX6_FINDINGS.md](APEX6_FINDINGS.md); per-device
 evidence, configuration snapshots and operator logs are excluded from Git.
 
-## Automated checks
+## Dongle update, 2026-09-30
+
+The experimental dongle path is separately documented in
+[the dongle investigation](APEX6_DONGLE_INVESTIGATION.md). Normal builds with
+experimental targets disabled passed all 29 native checks; the diagnostic-enabled
+suite had passed all 43 checks. The updated Tray passed 150 managed learning,
+launch and settings assertions, the shared grip-control suite, and explicit
+USB/dongle/Apex4/5 argument-routing checks. The portable review package passed
+real-DLL raw-ABI validation. No package was installed or published.
+
+The operator confirmed wireless gameplay, then closed the console window. Input
+remained functional but vibration required a controller restart; no final game
+session report survived. This does not qualify orderly game-session shutdown.
+Left/right/both bounded pulse runs did match postflight and have operator-observed
+normal recovery. Anomalous restore replies retain their unverified classification.
+
+## Automated checks, 2026-09-29
 
 | Check | Recorded result |
 | --- | --- |
