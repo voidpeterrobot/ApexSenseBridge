@@ -43,7 +43,7 @@ CLI example, after `ApexSenseBridge list`:
 Consent is stored once. Subsequent runs omit `--apex6-beta-consent`. With multiple
 eligible controllers, an explicit current list index is required. The UI control
 panel accepts that index; it never persists a machine-specific device instance ID.
-USB sessions run continuously unless `--seconds` is supplied. No game is launched by
+USB and integrated dongle sessions run continuously unless `--seconds` is supplied. No game is launched by
 the CLI or the implementation/build scripts.
 
 ### Experimental 2.4 GHz dongle
@@ -55,8 +55,10 @@ include this path; no experimental executable is needed. CLI users add
 `--apex6-dongle-beta` to the usual `bridge-triggers` command. Apex6 beta consent
 is still required, and the existing gain/mute/reset controls apply.
 
-Dongle sessions stop after ten minutes of active feedback or twenty minutes
-overall. Whitelist Launch prepares isolation first, and game exit or **Stop
+Integrated dongle sessions have no active-feedback or total-session time limit.
+Choose **Start bridge** beside **Stop bridge** in the shared control center to
+prepare the controller without launching a game. Wait for ready before opening
+a game or tester. Whitelist Launch also prepares isolation first, and game exit or **Stop
 bridge** requests orderly shutdown. Close the game before preparing another
 session. Do not close the engine console or kill its process to stop normally:
 forced termination can leave input working but require a full controller restart
@@ -69,6 +71,11 @@ and the operator reported successful Endfield gameplay. That game run ended by
 closing the console, left no final session report, and required a controller
 restart for vibration. Game-session orderly shutdown and radio-loss behavior
 remain pending. See [the evidence and limits](APEX6_DONGLE_INVESTIGATION.md).
+
+The standalone dongle diagnostic executable retains its ten-minute active and
+twenty-minute total limits. Continuous integrated sessions retain component
+watchdogs, native write deadlines, isolation monitoring and fail-stop behavior.
+Removing session limits does not establish long-duration wireless qualification.
 
 ## Output and controls
 

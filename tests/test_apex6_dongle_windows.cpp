@@ -74,5 +74,15 @@ int main(){try{
         for(unsigned i=0;i<400;++i){h.kernel.peer.clock+=Time(8000);check(h.send(dongle::pulsePacket(i%32,dongle::PulseSide::Both)).status==Completion::Complete,"live output beyond pulse budget");h.io->drainLiveTimings([](const NativeTiming&){});}
         h.io->stopLive(h.kernel.peer.now());for(unsigned i=0;i<2;++i){h.kernel.peer.clock+=Time(8000);check(h.send(gripWaveform({})).status==Completion::Complete,"live tail");}h.kernel.peer.clock+=Time(8000);const auto modes=gripLifecyclePlan(h.baseline);for(unsigned i=1;i<4;++i){h.request({4,{},16});h.request(modes[i]);}for(const auto& r:gripBaselinePlan())h.request(r);h.refused(frame(4));}
     {Harness h;h.baselines();promoteDongleLiveTransport(*h.io,h.baseline,{0,1,false},[]{return false;},[]{});h.kernel.peer.clock=Time(1200000000);h.refused(frame(1));}
+    {Harness h;h.baselines();promoteDongleLiveTransport(*h.io,h.baseline,{0,1,false},[]{return false;},[]{},false);
+        // Idle readiness can outlast the former total limit before fresh preflight.
+        h.kernel.peer.clock=Time(1800000000);
+        for(const auto& r:gripBaselinePlan())h.request(r);h.request(gripLifecyclePlan(h.baseline)[0]);check(h.send(gripWaveform({})).status==Completion::Complete,"continuous lead after idle");
+        for(unsigned i=0;i<160000;++i){h.kernel.peer.clock+=Time(8000);check(h.send(dongle::pulsePacket(i%32)).status==Completion::Complete,"continuous native output hit duration cap");h.io->drainLiveTimings([](const NativeTiming&){});h.kernel.peer.submissions.clear();}
+        h.io->stopLive(h.kernel.peer.now());for(unsigned i=0;i<2;++i){h.kernel.peer.clock+=Time(8000);check(h.send(gripWaveform({})).status==Completion::Complete,"continuous tail");}h.kernel.peer.clock+=Time(8000);
+        const auto modes=gripLifecyclePlan(h.baseline);for(unsigned i=1;i<4;++i){h.request({4,{},16});h.request(modes[i]);}for(const auto& r:gripBaselinePlan())h.request(r);h.refused(frame(4));}
+    {Harness h;h.baselines();promoteDongleLiveTransport(*h.io,h.baseline,{0,1,false},[]{return false;},[]{},false);
+        for(const auto& r:gripBaselinePlan())h.request(r);h.request(gripLifecyclePlan(h.baseline)[0]);check(h.send(gripWaveform({})).status==Completion::Complete,"continuous deadline lead");
+        h.kernel.peer.clock+=Time(8000);h.kernel.delay=Time(4000);check(h.send(dongle::pulsePacket(0)).status==Completion::Failed,"continuous mode relaxed native deadline");h.refused(gripWaveform({}));}
     std::cout<<"Dongle single-handle promotion, native pulse selection, spacing and deadlines passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

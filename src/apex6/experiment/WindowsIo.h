@@ -79,7 +79,7 @@ void promoteDongleNeutralTransport(WindowsTransport&,const GripBaseline&,
 void promoteDonglePulseTransport(WindowsTransport&,const GripBaseline&,
     const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,dongle::PulseSide = dongle::PulseSide::Left);
 void promoteDongleLiveTransport(WindowsTransport&,const GripBaseline&,live::Policy,
-    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck);
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,bool boundedDiagnostic = true);
 #endif
 #endif
 // Fixed shared GENERIC_READ only. Native write() rejects every report.

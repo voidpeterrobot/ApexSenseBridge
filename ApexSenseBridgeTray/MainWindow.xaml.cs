@@ -23,7 +23,7 @@ namespace ApexSenseBridgeTray
         private readonly TraySettings settings;
         private bool isInitialized;
         private UpdateInfo latestUpdateInfo;
-        private bool launchingGame;
+        private bool sessionActionPending;
 
         public MainWindow(
             CloudGameListService gameListService,
@@ -135,8 +135,8 @@ namespace ApexSenseBridgeTray
         private void OnWhitelistSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (BtnLaunchWhitelistedGame == null) return;
-            BtnLaunchWhitelistedGame.IsEnabled = !launchingGame && LstLaunchWhitelist.SelectedItem != null && !sessionManager.IsSessionActive;
-            BtnRemoveWhitelistedGame.IsEnabled = !launchingGame && LstLaunchWhitelist.SelectedItem != null;
+            BtnLaunchWhitelistedGame.IsEnabled = !sessionActionPending && LstLaunchWhitelist.SelectedItem != null && !sessionManager.IsSessionActive;
+            BtnRemoveWhitelistedGame.IsEnabled = !sessionActionPending && LstLaunchWhitelist.SelectedItem != null;
         }
 
         private void OnAddWhitelistedGame(object sender, RoutedEventArgs e)
@@ -159,11 +159,12 @@ namespace ApexSenseBridgeTray
         private async void OnLaunchWhitelistedGame(object sender, RoutedEventArgs e)
         {
             var path = LstLaunchWhitelist.SelectedItem as string;
-            if (path == null || launchingGame) return;
-            launchingGame = true;
+            if (path == null || sessionActionPending) return;
+            sessionActionPending = true;
             ChkApex6Dongle.IsEnabled = false;
             BtnAddWhitelistedGame.IsEnabled = false;
             ChkManualBridge.IsEnabled = false;
+            BtnStartBridge.IsEnabled = false;
             BtnStopBridge.IsEnabled = false;
             OnWhitelistSelectionChanged(null, null);
             TxtLaunchStatus.Text = "Preparing controller… The game will start after the bridge is ready.";
@@ -172,18 +173,42 @@ namespace ApexSenseBridgeTray
                 TxtLaunchStatus.Text = "Game launched. The bridge will stop when the game exits.";
             } catch (Exception ex) { TxtLaunchStatus.Text = ex.Message; }
             finally {
-                launchingGame = false;
+                sessionActionPending = false;
                 BtnAddWhitelistedGame.IsEnabled = true;
                 ChkManualBridge.IsEnabled = true;
                 UpdateSessionStatus();
             }
         }
 
+        private void OnStartBridge(object sender, RoutedEventArgs e)
+        {
+            if (sessionActionPending || sessionManager.IsSessionActive) return;
+            // Use the same manual session lifecycle as the settings switch.
+            // No game process is started by this action.
+            if (ChkManualBridge.IsChecked == true) OnManualBridgeChanged(sender, e);
+            else ChkManualBridge.IsChecked = true;
+        }
+
         private async void OnStopBridge(object sender, RoutedEventArgs e)
         {
-            BtnStopBridge.IsEnabled = false;
-            await Task.Run(() => sessionManager.StopSession("Stopped from control center"));
+            if (sessionActionPending) return;
+            sessionActionPending = true;
+            ChkManualBridge.IsEnabled = false;
             UpdateSessionStatus();
+            isInitialized = false;
+            ChkManualBridge.IsChecked = false;
+            isInitialized = true;
+            settings.ForcedProfile = "none";
+            settings.Save();
+            try {
+                await Task.Run(() => sessionManager.StopSession("Stopped from control center"));
+                TxtLaunchStatus.Text = "Bridge stopped.";
+            } catch (Exception ex) { TxtLaunchStatus.Text = ex.Message; }
+            finally {
+                sessionActionPending = false;
+                ChkManualBridge.IsEnabled = true;
+                UpdateSessionStatus();
+            }
         }
 
         private void OnApex6DongleChanged(object sender, RoutedEventArgs e)
@@ -222,8 +247,9 @@ namespace ApexSenseBridgeTray
         public void UpdateSessionStatus()
         {
             OnWhitelistSelectionChanged(null, null);
-            BtnStopBridge.IsEnabled = sessionManager.IsSessionActive && !launchingGame;
-            ChkApex6Dongle.IsEnabled = !sessionManager.IsSessionActive && !launchingGame;
+            BtnStartBridge.IsEnabled = !sessionManager.IsSessionActive && !sessionActionPending;
+            BtnStopBridge.IsEnabled = sessionManager.IsSessionActive && !sessionActionPending;
+            ChkApex6Dongle.IsEnabled = !sessionManager.IsSessionActive && !sessionActionPending;
             PillTriggers.Visibility = sessionManager.HasActiveApex6Session ? Visibility.Collapsed : Visibility.Visible;
             if (sessionManager.IsSessionActive)
             {
@@ -372,7 +398,9 @@ namespace ApexSenseBridgeTray
                     isInitialized = true;
                     settings.ForcedProfile = "none";
                     settings.Save();
+                    TxtLaunchStatus.Text = error ?? "Bridge startup failed.";
                 }
+                else TxtLaunchStatus.Text = "Bridge ready. No game was launched. Use Stop bridge when finished.";
                 monitorService.ForceCheck();
             }
             else
@@ -383,6 +411,7 @@ namespace ApexSenseBridgeTray
                 }
                 monitorService.ForceCheck();
             }
+            UpdateSessionStatus();
         }
 
         private async void OnUpdateDatabaseClick(object sender, RoutedEventArgs e)

@@ -3,7 +3,8 @@
 **Development build: Apex6 Pro integrated beta.** Direct USB grip output is now
 available through `bridge-triggers`, Tray manual pre-start, and Playnite's
 pre-launch hook. Tray/CLI also offer an explicitly selected experimental 2.4 GHz
-mode, limited to ten minutes of active feedback. Opt-in is disabled by default.
+mode with continuous sessions. Opt-in is disabled by default. **Start bridge** in
+the shared control center prepares the controller without launching a game.
 Adaptive triggers, Bluetooth and onboard-profile switching remain unsupported on Apex6. Integrated hardware
 qualification is pending. See [setup and qualification](docs/APEX6_INTEGRATED_BETA.md).
 

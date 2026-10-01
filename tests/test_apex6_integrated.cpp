@@ -36,7 +36,7 @@ void heldMotor(){
     s.ingest({liveHid(10,255,255,false,3,0,2),Time(3680000)},Time(3680000));s.reset();check(!active(s.packet(Time(3690000))),"stop retained HID");
     check(!asb::platform::validGripGain(std::numeric_limits<double>::infinity())&&!asb::platform::validGripGain(-1)&&asb::platform::validGripGain(12),"gain validation");
 }
-void hourSimulation(){
+void hourSimulation(live::ReplyBoundary boundary){
     auto b=gripRehearsalFixture();FakeIo io(b);TraceCounter trace;
     live::Stream stream(1,live::Stream::HidLifetime::UntilChanged);live::RawQueue queue([&]{return io.clock;});
     std::uint64_t sequence=0,tick=0;auto pcm=livePcm(1);
@@ -53,12 +53,13 @@ void hourSimulation(){
         if(tick%10000==0)stream.gain((tick/10000)%2?12:1);
     };
     control.packet=[&](Time now){return stream.packet(now);};control.discard=[&]{stream.discardPcm();};control.nativeStop=[](Time){};
-    auto result=live::run(io,trace,b,{0,1,false},control);
+    auto result=live::run(io,trace,b,{0,1,false},control,{},boundary);
     check(result.complete&&result.postflightMatches,"one-hour lifecycle failed");
     check(result.streamed>400000&&result.lateDispatches>0,"continuous duration/lateness policy");
+    check(result.stopReason=="operator_q"&&result.queries==(boundary==live::ReplyBoundary::None?28:31),"continuous stop/shutdown boundaries");
     check(stream.metrics().hidSamples>0&&stream.metrics().validRecords>0,"mixed feedback missing");
     check(stream.metrics().peakSamples<=40&&queue.metrics().peakBytes<10000&&!queue.failed(),"memory bound");
     check(result.restores[0]!=ModeReply::NotObserved&&result.deviceStateUncertain,"restore was silently verified");
     std::cout<<"3600 simulated seconds: "<<result.streamed<<" packets, "<<result.lateDispatches<<" late dispatches; peak queue "<<queue.metrics().peakBytes<<" bytes; PCM peak "<<stream.metrics().peakSamples<<" samples\n";
 }
-int main(){try{heldMotor();hourSimulation();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{heldMotor();hourSimulation(live::ReplyBoundary::None);hourSimulation(live::ReplyBoundary::DongleContinuous);return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

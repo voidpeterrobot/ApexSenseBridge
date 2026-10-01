@@ -78,7 +78,7 @@ operator-confirmed correct-side output, complete stop and normal operation
 without restart. The operator then reported successful Endfield gameplay, but
 closed the console rather than using Q; no final report was produced, and normal
 vibration required a controller restart. Tray/CLI now expose a separately selected,
-bounded dongle beta. Game-session orderly shutdown remains unverified. Full wireless support
+continuous dongle beta (since 2026-10-01). Game-session orderly shutdown remains unverified. Full wireless support
 remains unqualified. Descriptor matching alone cannot enforce the
 previously tested direct-USB scope.
 

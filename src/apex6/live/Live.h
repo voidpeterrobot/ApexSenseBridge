@@ -39,7 +39,7 @@ private:
 };
 // Used independently at the session and native submission boundaries. Only
 // requestStop transitions streaming to a two-neutral-packet tail, irreversibly.
-enum class ReplyBoundary { None, DongleUidDiagnostic, DongleLiveDiagnostic };
+enum class ReplyBoundary { None, DongleUidDiagnostic, DongleLiveDiagnostic, DongleContinuous };
 class NativeGuard {
 public:
     NativeGuard(const GripBaseline&,Policy,Time start,ReplyBoundary = ReplyBoundary::None);

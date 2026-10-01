@@ -24,7 +24,7 @@ void Authorization::check(std::int64_t now)const{policy_.validate();gripLifecycl
 void Authorization::activate(std::int64_t now)const{check(now);require(!consumed_->load(),"live authorization already consumed");if(policy_.continuous()){std::int64_t expected=-1;require(activated_->compare_exchange_strong(expected,now),"live session already activated");}}
 void Authorization::consume()const{require(!consumed_->exchange(true),"live authorization already consumed");}
 NativeGuard::NativeGuard(const GripBaseline& b,Policy p,Time start,ReplyBoundary boundary):layout_(b.binding.layout),policy_(p),queries_(gripBaselinePlan()),modes_(gripLifecyclePlan(b)),last_(start),boundary_(boundary),unit_(b.unit) {
-    require(boundary==ReplyBoundary::None||(boundary==ReplyBoundary::DongleUidDiagnostic&&p.seconds==1&&!p.strictDispatch)||(boundary==ReplyBoundary::DongleLiveDiagnostic&&p.continuous()&&!p.strictDispatch),"invalid diagnostic reply boundary policy");
+    require(boundary==ReplyBoundary::None||(boundary==ReplyBoundary::DongleUidDiagnostic&&p.seconds==1&&!p.strictDispatch)||((boundary==ReplyBoundary::DongleLiveDiagnostic||boundary==ReplyBoundary::DongleContinuous)&&p.continuous()&&!p.strictDispatch),"invalid dongle reply boundary policy");
     p.validate();require(start.count()>=0&&start<Time::max()-Time(1200000000),"invalid live clock origin");sessionEnd_=boundary==ReplyBoundary::DongleLiveDiagnostic?start+Time(1200000000):p.continuous()?Time::max():start+Time(240000000);
 }
 [[noreturn]] void NativeGuard::fail(const char* why){failed_=true;throw ProtocolError(why);}

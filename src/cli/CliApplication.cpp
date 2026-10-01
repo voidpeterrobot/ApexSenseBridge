@@ -71,7 +71,7 @@ void printUsage() {
         << "                  [--isolate-apex]\n"
         << "                  [--session-token 32HEX]\n"
         << "                  [--controller-model apex6-pro] [--apex6-beta-consent] [--grip-gain 0..12]\n"
-        << "                  [--apex6-dongle-beta] (experimental: 10 min active / 20 min total)\n"
+        << "                  [--apex6-dongle-beta] (experimental, continuous by default)\n"
         << "                               Route adaptive triggers and optional grip/audio haptics\n"
         << "  test-rt [index]              Gentle RT FORCEADAPT test (~1.5 s)\n"
         << "  test-rumble [index]          Gentle grip-motor vibration test (~1 s)\n"
@@ -85,7 +85,7 @@ void printUsage() {
         << "  dry-run                      Print the test packet without HID I/O\n\n"
         << "Hardware writes only target a verified Apex 4 (04B4:2412, DInput) or\n"
         << "Apex 5 (Flydigi 37D7 controller family). Pass an index if several are found.\n"
-        << "Apex6 Pro USB (37D7:2502) uses an opt-in grip-only beta; no triggers/profiles/wireless.\n"
+        << "Apex6 Pro (37D7:2502) uses an opt-in USB/dongle grip-only beta; no triggers/profiles/Bluetooth.\n"
         << "Start Apex6 before the game. Q stops; +/- adjust gain; 0 mutes; 1 resets.\n"
         << "virtual-ds never opens the APEX HID interface and never routes feedback to it.\n";
 }

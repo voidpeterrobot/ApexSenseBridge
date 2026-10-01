@@ -167,12 +167,12 @@ public:
         liveCancelled_=cancelled;liveEntryCheck_=entryCheck;timings_.resize(4096);
     }
     void authorizeDongleLive(const GripBaseline& baseline,live::Policy policy,
-        const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
+        const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,bool boundedDiagnostic) {
         try {
             require(gripReports_.size()==30&&gripIndex_==30&&!stopped_,"dongle live requires completed startup boundaries on this handle");
             gripReports_.clear();gripIndex_=0;
             authorizeIntegrated(baseline,policy,cancelled,entryCheck);
-            live_=std::make_unique<live::NativeGuard>(baseline,policy,now(),live::ReplyBoundary::DongleLiveDiagnostic);
+            live_=std::make_unique<live::NativeGuard>(baseline,policy,now(),boundedDiagnostic?live::ReplyBoundary::DongleLiveDiagnostic:live::ReplyBoundary::DongleContinuous);
         }catch(...){stopped_=true;throw;}
     }
 #endif
@@ -523,9 +523,9 @@ std::unique_ptr<WindowsTransport> openIntegratedTransport(const GripBaseline& b,
     io->authorizeIntegrated(b,p,cancelled,entryCheck);return io;
 }
 void promoteDongleLiveTransport(WindowsTransport& transport,const GripBaseline& baseline,live::Policy policy,
-    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck) {
+    const std::function<bool()>& cancelled,const std::function<void()>& entryCheck,bool boundedDiagnostic) {
     auto* io=dynamic_cast<WindowsIo*>(&transport);require(io!=nullptr,"wrong dongle live native transport");
-    io->authorizeDongleLive(baseline,policy,cancelled,entryCheck);
+    io->authorizeDongleLive(baseline,policy,cancelled,entryCheck,boundedDiagnostic);
 }
 #endif
 std::unique_ptr<WindowsTransport> makeLiveIoForTest(const live::Authorization& a,HANDLE h,WindowsIoHooks hooks,const std::function<std::int64_t()>& clock,const std::function<bool()>& cancelled){auto io=std::make_unique<WindowsIo>(a.baseline().binding,h,std::move(hooks));io->authorizeLive(a,clock,cancelled);return io;}

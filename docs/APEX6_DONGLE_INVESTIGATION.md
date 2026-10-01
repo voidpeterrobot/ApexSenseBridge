@@ -362,7 +362,7 @@ remaining instrumented evidence.
 
 ## Tray and normal CLI integration
 
-The normal engine exposes this bounded path only with `--apex6-dongle-beta`.
+The normal engine exposes this path only with `--apex6-dongle-beta`.
 Tray persists an off-by-default **Use 2.4 GHz dongle (experimental)** checkbox
 in the shared control center and passes the flag only for a selected Apex6.
 It does not infer transport from the ambiguous VID/PID or connection field.
@@ -371,12 +371,20 @@ session-token stop, game-exit handling and maintenance stop remain in use.
 USB and Apex4/5 routing are unchanged. Playnite's Apex6 path remains USB-only.
 
 The integrated dongle path uses the same 30-query startup and validated shutdown
-boundaries as the live diagnostic, the same ten-/twenty-minute bounds, and scope
-`apex6-dongle-beta-v1`. The UI states those limits and the possible controller
+boundaries as the live diagnostic and scope `apex6-dongle-beta-v1`. As of
+2026-10-01, integrated sessions run continuously, without the former ten-minute
+active or twenty-minute total cap; explicit CLI `--seconds` still applies.
+The standalone diagnostic retains both bounds. The UI states the possible controller
 restart after forced stop or disconnect. Normal builds and portable packages do
 not require experimental CMake flags. The diagnostic binaries remain opt-in and
 excluded from package payloads. Public evidence deliberately does not upgrade
 the successful game observation into full wireless qualification.
+
+The shared control center offers **Start bridge** beside **Stop bridge**, using
+the existing manual pre-start lifecycle without launching a game. Stop clears
+the manual activation setting and requests orderly shutdown. Users should wait
+for readiness before opening a game or tester. Component watchdogs, isolation
+checks, native write deadlines and shutdown UID boundaries remain enforced.
 
 ### Reference tooling
 

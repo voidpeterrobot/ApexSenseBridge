@@ -176,7 +176,7 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         supervisorProgress=live::monotonic().count();
         // Hold exclusive access throughout the ready/idle period. Opening this
         // guard sends no reports; its first writes are the fresh entry preflight.
-        if(dongle)ex::promoteDongleLiveTransport(*io,baseline,policy,cancelled,entryCheck);
+        if(dongle)ex::promoteDongleLiveTransport(*io,baseline,policy,cancelled,entryCheck,options.apex6DongleDiagnostic);
         else io=ex::openIntegratedTransport(baseline,policy,cancelled,entryCheck);
         auto gamepads=capture::captureInputDevices(error);require(error.empty(),error);
         std::erase_if(gamepads,[&](const auto& pad){return pad.containerId!=selected.containerId;});
@@ -239,8 +239,10 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         // ordinary scheduling, and scope exit restores this thread on every path.
         OutputScheduling outputScheduling;
         outputScheduling.enable();multimediaScheduling=true;
-        publish(platform::SessionPhase::Ready,0,dongle?"Apex6 dongle beta ready, awaiting feedback (10 min active / 20 min total). Game launch may continue.":"Apex6 beta ready, awaiting feedback. Game launch may continue.");
-        std::cout<<(dongle?"Apex6 DONGLE BETA ready, awaiting feedback. Maximum 10 minutes active / 20 minutes total. ":"Apex6 USB grip beta ready, awaiting feedback. ")<<"Q: orderly stop; +/-: gain; 0: mute; 1: reset. Ctrl+C: fail-stop."<<std::endl;
+        publish(platform::SessionPhase::Ready,0,dongle?"Apex6 dongle beta ready, awaiting feedback. Game launch may continue.":"Apex6 beta ready, awaiting feedback. Game launch may continue.");
+        std::cout<<(dongle?"Apex6 DONGLE BETA ready, awaiting feedback. ":"Apex6 USB grip beta ready, awaiting feedback. ");
+        if(options.apex6DongleDiagnostic)std::cout<<"Maximum 10 minutes active / 20 minutes total. ";
+        std::cout<<"Q: orderly stop; +/-: gain; 0: mute; 1: reset. Ctrl+C: fail-stop."<<std::endl;
         auto nextStatus=live::monotonic();auto lastSource=live::Stream::Source::AwaitingFeedback;
         unsigned sourceMessages=0;
         double appliedGain=settings.gain;
@@ -266,7 +268,7 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
         };
         const auto readyAt=live::monotonic();
         auto stop=[&]{return orderly.load()||(options.duration&&live::monotonic()-readyAt>=*options.duration)||
-            (dongle&&live::monotonic()-diagnosticStart>=Time(1190000000));};
+            (options.apex6DongleDiagnostic&&live::monotonic()-diagnosticStart>=Time(1190000000));};
         while(!stop()){
             require(!cancelled(),queue.failed()?queue.failure():"Session cancelled; no recovery commands sent.");pump();
             // Gain does not affect eligibility. Silence and explicit zero may
@@ -283,7 +285,9 @@ int commandApex6Bridge(const HidDeviceInfo& selected,const BridgeCommandOptions&
             live::Control control{[&](Time due){wait.waitUntil(due);},cancelled,stop,pump,
                 [&](Time now){return stream->packet(now);},[&]{pump();stream->discardPcm();},
                 [&](Time now){io->stopLive(now);},[&]{workerProgress=live::monotonic().count();}};
-            result=live::run(*io,trace,baseline,policy,control,entryCheck,dongle?live::ReplyBoundary::DongleLiveDiagnostic:live::ReplyBoundary::None);
+            const auto boundary=options.apex6DongleDiagnostic?live::ReplyBoundary::DongleLiveDiagnostic:
+                dongle?live::ReplyBoundary::DongleContinuous:live::ReplyBoundary::None;
+            result=live::run(*io,trace,baseline,policy,control,entryCheck,boundary);
         }
     } catch(const std::exception& e){result.complete=false;result.failure=e.what();result.stopReason="failure";}
     finishing=true;

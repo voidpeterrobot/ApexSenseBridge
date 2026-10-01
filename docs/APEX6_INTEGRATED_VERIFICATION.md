@@ -122,3 +122,23 @@ tree was reviewed for personal paths, device-instance suffixes, unit/container
 identifiers and raw evidence. Obsolete session reports and the stray diagnostic
 output were removed; useful findings are consolidated in the public summary.
 Ignored local evidence and build/package directories are not commit inputs.
+
+## Continuous dongle sessions and manual entry (2026-10-01)
+
+Removed both duration caps from the integrated dongle path. Standalone diagnostic
+limits remain unchanged. The shared control center now offers **Start bridge**
+without launching a game; **Stop bridge** also clears manual activation.
+
+- Normal x64 Release build: all 29 native tests passed, no skips.
+- Simulated one-hour mixed PCM/HID sessions passed for USB and dongle, with bounded
+  queues, recorded dispatch lateness and orderly shutdown. Dongle shutdown used
+  all three UID boundaries and matching postflight.
+- Native dongle transport accepted a 30-minute simulated wait before entry and
+  more than 21 minutes of waveform output, then completed the shutdown sequence.
+  A separate check confirmed the 4-ms write deadline still rejects late writes.
+- Tray build and 150 managed assertions passed, along with shared settings/control
+  tests and the compiled Tray transport-routing check.
+
+This verification uses simulated transport and feedback. No new physical session
+or game run was performed; long-duration wireless qualification remains pending.
+The portable build is produced under ignored `dist_private`, not `dist`.
